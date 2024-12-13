@@ -46,8 +46,7 @@ class Parameters(NodeParameters):
     max_amp_factor: float = 1.2
     amp_factor_step: float = 0.005
     max_number_rabi_pulses_per_sweep: int = 100
-    flux_point_joint_or_independent: Literal["joint", "independent"] = "independent"
-    reset_type_thermal_or_active: Literal["thermal", "active"] = "thermal"
+    reset_type_thermal_or_active: Literal["thermal", "active"] = "active"
     simulate: bool = False
     simulation_duration_ns: int = 2500
     timeout: int = 100
@@ -60,24 +59,27 @@ node = QualibrationNode(name="08_Power_Rabi_Error_Amplification", parameters=Par
 # Class containing tools to help handling units and conversions.
 u = unit(coerce_to_integer=True)
 # Instantiate the QuAM class from the state file
-machine = QuAM.load()
-# Generate the OPX and Octave configurations
-config = machine.generate_config()
+quam = QuAM.load()
+
 # Open Communication with the QOP
-qmm = machine.connect()
+qmm = quam.connect()
 
 # Get the relevant QuAM components
 if node.parameters.qubits is None or node.parameters.qubits == "":
-    qubits = machine.active_qubits
+    qubits = quam.active_qubits
 else:
-    qubits = [machine.qubits[q] for q in node.parameters.qubits]
+    qubits = [quam.qubits[q] for q in node.parameters.qubits]
 num_qubits = len(qubits)
 
 
 # %% {QUA_program}
+config = quam.generate_config()
+config['controllers']['con1']['fems'][1]['analog_inputs'][1]['gain_db'] = 30
+for q in quam.qubits:
+    config['elements'][q+'.xy']['thread'] = q
+    config['elements'][q+'.resonator']['thread'] = q
 n_avg = node.parameters.num_averages  # The number of averages
 N_pi = node.parameters.max_number_rabi_pulses_per_sweep  # Number of applied Rabi pulses sweep
-flux_point = node.parameters.flux_point_joint_or_independent  # 'independent' or 'joint'
 reset_type = node.parameters.reset_type_thermal_or_active  # "active" or "thermal"
 operation = node.parameters.operation_x180_or_any_90  # The qubit operation to play
 # Pulse amplitude sweep (as a pre-factor of the qubit pulse amplitude) - must be within [-2; 2)
@@ -104,22 +106,14 @@ with program() as power_rabi:
     count = declare(int)  # QUA variable for counting the qubit pulses
 
     for i, qubit in enumerate(qubits):
-        # Bring the active qubits to the minimum frequency point
-        if flux_point == "independent":
-            machine.apply_all_flux_to_min()
-            qubit.z.to_independent_idle()
-        elif flux_point == "joint":
-            machine.apply_all_flux_to_joint_idle()
-        else:
-            machine.apply_all_flux_to_zero()
-
+        align()
         with for_(n, 0, n < n_avg, n + 1):
             save(n, n_st)
             with for_(*from_array(npi, N_pi_vec)):
                 with for_(*from_array(a, amps)):
                     # Initialize the qubits
                     if reset_type == "active":
-                        active_reset(qubit, "readout")
+                        active_reset(qubit, "readout", readout_pulse_name='readout')
                     else:
                         wait(qubit.thermalization_time * u.ns)
 
@@ -163,14 +157,13 @@ if node.parameters.simulate:
     plt.tight_layout()
     # Save the figure
     node.results = {"figure": plt.gcf()}
-    node.machine = machine
+    node.machine = quam
     node.save()
 
 else:
     with qm_session(qmm, config, timeout=node.parameters.timeout) as qm:
         job = qm.execute(power_rabi)
 
-        # %% {Live_plot}
         results = fetching_tool(job, ["n"], mode="live")
         while results.is_processing():
             n = results.fetch_all()[0]
@@ -212,13 +205,13 @@ else:
             phi_fit = phi_fit - np.pi * (phi_fit > np.pi / 2)
             factor = float(1.0 * (np.pi - phi_fit) / (2 * np.pi * f_fit))
             new_pi_amp = q.xy.operations[operation].amplitude * factor
-            if new_pi_amp < 0.3:  # TODO: 1 for OPX1000 MW
-                print(f"amplitude for Pi pulse is modified by a factor of {factor:.2f}")
+            if new_pi_amp < 0.6:  # TODO: 1 for OPX1000 MW
+                print(f"amplitude for Pi pulse is modified by a factor of {factor:.6f}")
                 print(f"new amplitude is {1e3 * new_pi_amp:.2f} mV \n")  # TODO: 1 for OPX1000 MW
                 fit_results[q.name]["Pi_amplitude"] = float(new_pi_amp)
             else:
                 print(f"Fitted amplitude too high, new amplitude is 300 mV \n")
-                fit_results[q.name]["Pi_amplitude"] = 0.3  # TODO: 1 for OPX1000 MW
+                fit_results[q.name]["Pi_amplitude"] = 0.6  # TODO: 1 for OPX1000 MW
         node.results["fit_results"] = fit_results
 
     elif N_pi > 1:
@@ -230,15 +223,15 @@ else:
         for q in qubits:
             new_pi_amp = ds.abs_amp.sel(qubit=q.name)[data_max_idx.sel(qubit=q.name)]
             fit_results[q.name] = {}
-            if new_pi_amp < 0.3:  # TODO: 1 for OPX1000 MW
+            if new_pi_amp < 0.6:  # TODO: 1 for OPX1000 MW
                 fit_results[q.name]["Pi_amplitude"] = float(new_pi_amp)
                 print(
-                    f"amplitude for Pi pulse is modified by a factor of {I_n.idxmax(dim='amp').sel(qubit = q.name):.2f}"
+                    f"amplitude for Pi pulse is modified by a factor of {I_n.idxmax(dim='amp').sel(qubit = q.name):.6f}"
                 )
                 print(f"new amplitude is {1e3 * new_pi_amp:.2f} mV \n")  # TODO: 1 for OPX1000 MW
             else:
-                print(f"Fitted amplitude too high, new amplitude is 300 mV \n")
-                fit_results[q.name]["Pi_amplitude"] = 0.3  # TODO: 1 for OPX1000 MW
+                print(f"Fitted amplitude too high, new amplitude is 600 mV \n")
+                fit_results[q.name]["Pi_amplitude"] = 0.6  # TODO: 1 for OPX1000 MW
         node.results["fit_results"] = fit_results
 
     # %% {Plotting}
@@ -268,5 +261,7 @@ else:
     # %% {Save_results}
     node.outcomes = {q.name: "successful" for q in qubits}
     node.results["initial_parameters"] = node.parameters.model_dump()
-    node.machine = machine
+    node.machine = quam
     node.save()
+    quam.save()
+# %%

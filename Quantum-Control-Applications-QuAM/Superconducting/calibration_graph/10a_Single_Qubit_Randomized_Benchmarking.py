@@ -49,8 +49,7 @@ class Parameters(NodeParameters):
     max_circuit_depth: int = 1000  # Maximum circuit depth
     delta_clifford: int = 20
     seed: int = 345324
-    flux_point_joint_or_independent: Literal["joint", "independent"] = "independent"
-    reset_type_thermal_or_active: Literal["thermal", "active"] = "thermal"
+    reset_type_thermal_or_active: Literal["thermal", "active"] = "active"
     simulate: bool = False
     simulation_duration_ns: int = 2500
     timeout: int = 100
@@ -63,21 +62,26 @@ node = QualibrationNode(name="10a_Single_Qubit_Randomized_Benchmarking", paramet
 # Class containing tools to help handling units and conversions.
 u = unit(coerce_to_integer=True)
 # Instantiate the QuAM class from the state file
-machine = QuAM.load()
-# Generate the OPX and Octave configurations
+quam = QuAM.load()
 
-config = machine.generate_config()
 # Open Communication with the QOP
-qmm = machine.connect()
+qmm = quam.connect()
 
 if node.parameters.qubits is None or node.parameters.qubits == "":
-    qubits = machine.active_qubits
+    qubits = quam.active_qubits
 else:
-    qubits = [machine.qubits[q] for q in node.parameters.qubits]
+    qubits = [quam.qubits[q] for q in node.parameters.qubits]
 num_qubits = len(qubits)
 
 
 # %% {QUA_program_parameters}
+
+config = quam.generate_config()
+config['controllers']['con1']['fems'][1]['analog_inputs'][1]['gain_db'] = 30
+for q in quam.qubits:
+    config['elements'][q+'.xy']['thread'] = q
+    config['elements'][q+'.resonator']['thread'] = q
+
 num_of_sequences = node.parameters.num_random_sequences  # Number of random sequences
 # Number of averaging loops for each random sequence
 n_avg = node.parameters.num_averages
@@ -86,7 +90,6 @@ if node.parameters.delta_clifford < 1:
     raise NotImplementedError("Delta clifford < 2 is not supported.")
 #  Play each sequence with a depth step equals to 'delta_clifford - Must be > 1
 delta_clifford = node.parameters.delta_clifford
-flux_point = node.parameters.flux_point_joint_or_independent
 reset_type = node.parameters.reset_type_thermal_or_active
 assert (max_circuit_depth / delta_clifford).is_integer(), "max_circuit_depth / delta_clifford must be an integer."
 num_depths = max_circuit_depth // delta_clifford + 1
@@ -213,16 +216,6 @@ with program() as randomized_benchmarking:
     # state_st = declare_stream()
     state_st = [declare_stream() for _ in range(num_qubits)]
 
-    for i, qubit in enumerate(qubits):
-        # Bring the active qubits to the desired frequency point
-        if flux_point == "independent":
-            machine.apply_all_flux_to_min()
-            qubit.z.to_independent_idle()
-        elif flux_point == "joint":
-            machine.apply_all_flux_to_joint_idle()
-        else:
-            raise ValueError(f"Unrecognized flux point {flux_point}")
-
     # QUA for_ loop over the random sequences
     with for_(m, 0, m < num_of_sequences, m + 1):
         # Generate the random sequence of length max_circuit_depth
@@ -238,15 +231,10 @@ with program() as randomized_benchmarking:
             with if_((depth == 1) | (depth == depth_target)):
                 with for_(n, 0, n < n_avg, n + 1):
                     for i, qubit in enumerate(qubits):
-                        # Bring the active qubits to the desired frequency point
-                        if flux_point == "independent":
-                            machine.apply_all_flux_to_min()
-                            qubit.z.to_independent_idle()
-                        else:
-                            align()
+                        align()
                         # Initialize the qubits
                         if reset_type == "active":
-                            active_reset(qubit, "readout")
+                            active_reset(qubit, "readout", readout_pulse_name='readout')
                         else:
                             qubit.resonator.wait(qubit.thermalization_time * u.ns)
                         # Align the two elements to play the sequence after qubit initialization
@@ -296,7 +284,7 @@ if node.parameters.simulate:
         plt.title(con)
     plt.tight_layout()
     node.results["figure"] = plt.gcf()
-    node.machine = machine
+    node.machine = quam
     node.save()
 
 else:
@@ -388,6 +376,6 @@ if not node.parameters.simulate:
 if not node.parameters.simulate:
     node.outcomes = {q.name: "successful" for q in qubits}
     node.results["initial_parameters"] = node.parameters.model_dump()
-    node.machine = machine
+    node.machine = quam
     node.save()
 

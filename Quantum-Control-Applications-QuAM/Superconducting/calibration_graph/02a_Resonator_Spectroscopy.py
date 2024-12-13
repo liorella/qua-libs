@@ -21,7 +21,7 @@ from qualibrate import QualibrationNode, NodeParameters
 from quam_libs.components import QuAM
 from quam_libs.macros import qua_declaration
 from quam_libs.lib.fit_utils import fit_resonator
-from quam_libs.lib.qua_datasets import apply_angle, subtract_slope, convert_IQ_to_V
+from quam_libs.lib.qua_datasets import apply_angle, subtract_slope, convert_IQ_to_V, gradient
 from quam_libs.lib.plot_utils import QubitGrid, grid_iter
 from quam_libs.lib.save_utils import fetch_results_as_xarray, load_dataset
 from qualang_tools.results import progress_counter, fetching_tool
@@ -39,8 +39,8 @@ import numpy as np
 class Parameters(NodeParameters):
 
     qubits: Optional[List[str]] = None
-    num_averages: int = 100
-    frequency_span_in_mhz: float = 30.0
+    num_averages: int = 1000
+    frequency_span_in_mhz: float = 10.0
     frequency_step_in_mhz: float = 0.1
     simulate: bool = False
     simulation_duration_ns: int = 2500
@@ -58,18 +58,20 @@ assert not (
 # Class containing tools to help handling units and conversions.
 u = unit(coerce_to_integer=True)
 # Instantiate the QuAM class from the state file
-machine = QuAM.load()
+quam = QuAM.load()
 # Generate the OPX and Octave configurations
-config = machine.generate_config()
+config = quam.generate_config()
+config['controllers']['con1']['fems'][1]['analog_inputs'][1]['gain_db'] = 30
+
 # Open Communication with the QOP
 if node.parameters.load_data_id is None:
-    qmm = machine.connect()
+    qmm = quam.connect()
 
 # Get the relevant QuAM components
 if node.parameters.qubits is None or node.parameters.qubits == "":
-    qubits = machine.active_qubits
+    qubits = quam.active_qubits
 else:
-    qubits = [machine.qubits[q] for q in node.parameters.qubits]
+    qubits = [quam.qubits[q] for q in node.parameters.qubits]
 resonators = [qubit.resonator for qubit in qubits]
 num_qubits = len(qubits)
 
@@ -87,19 +89,17 @@ with program() as multi_res_spec:
     I, I_st, Q, Q_st, n, n_st = qua_declaration(num_qubits=num_qubits)
     df = declare(int)  # QUA variable for the readout frequency
 
-    # Bring the active qubits to the minimum frequency point
-    machine.apply_all_flux_to_min()
-
     with for_(n, 0, n < n_avg, n + 1):
         save(n, n_st)
         with for_(*from_array(df, dfs)):
             for i, rr in enumerate(resonators):
+                align()
                 # Update the resonator frequencies for all resonators
                 update_frequency(rr.name, df + rr.intermediate_frequency)
                 # Measure the resonator
                 rr.measure("readout", qua_vars=(I[i], Q[i]))
                 # wait for the resonator to relax
-                rr.wait(machine.depletion_time * u.ns)
+                rr.wait(quam.depletion_time * u.ns)
                 # save data
                 save(I[i], I_st[i])
                 save(Q[i], Q_st[i])
@@ -129,7 +129,7 @@ if node.parameters.simulate:
     plt.tight_layout()
     # Update the node & save
     node.results = {"figure": plt.gcf()}
-    node.machine = machine
+    node.machine = quam
     node.save()
 
 elif node.parameters.load_data_id is None:
@@ -155,6 +155,7 @@ elif node.parameters.load_data_id is None:
     ds = ds.assign({"IQ_abs": np.sqrt(ds["I"] ** 2 + ds["Q"] ** 2)})
     # Derive the phase IQ_abs = angle(I + j*Q)
     ds = ds.assign({"phase": subtract_slope(apply_angle(ds.I + 1j * ds.Q, dim="freq"), dim="freq")})
+    ds = ds.assign({"group_delay": gradient(ds.phase, dim="freq")})
     # Add the resonator RF frequency axis of each qubit to the dataset coordinates for plotting
     ds = ds.assign_coords(
         {
@@ -202,7 +203,7 @@ elif node.parameters.load_data_id is None:
 
     grid = QubitGrid(ds, [q.grid_location for q in qubits])
     for ax, qubit in grid_iter(grid):
-        (ds.assign_coords(freq_MHz=ds.freq / 1e6).loc[qubit].phase * 1e3).plot(ax=ax, x="freq_MHz")
+        (ds.assign_coords(freq_MHz=ds.freq / 1e6).loc[qubit].group_delay * 1e3).plot(ax=ax, x="freq_MHz")
         ax.set_xlabel("Resonator detuning [MHz]")
         ax.set_ylabel("Trans. phase [mrad]")
         ax.set_title(qubit["qubit"])
@@ -212,10 +213,10 @@ elif node.parameters.load_data_id is None:
 
     grid = QubitGrid(ds, [q.grid_location for q in qubits])
     for ax, qubit in grid_iter(grid):
-        (ds.assign_coords(freq_GHz=ds.freq_full / 1e9).loc[qubit].IQ_abs * 1e3).plot(ax=ax, x="freq_GHz")
+        (ds.assign_coords(freq_GHz=ds.freq_full / 1e9).loc[qubit].I * 1e3).plot(ax=ax, x="freq_GHz")
         ax.plot(
             ds.assign_coords(freq_GHz=ds.freq_full / 1e9).loc[qubit].freq_GHz,
-            1e3 * np.abs(fit_evals[qubit["qubit"]]),
+            1e3 * np.real(fit_evals[qubit["qubit"]]),
         )
         ax.set_xlabel("Resonator freq [GHz]")
         ax.set_ylabel("Trans. amp. [mV]")
@@ -235,7 +236,7 @@ elif node.parameters.load_data_id is None:
     # %% {Save_results}
     node.outcomes = {q.name: "successful" for q in qubits}
     node.results["initial_parameters"] = node.parameters.model_dump()
-    node.machine = machine
+    node.machine = quam
     node.save()
     print("Results saved")
 

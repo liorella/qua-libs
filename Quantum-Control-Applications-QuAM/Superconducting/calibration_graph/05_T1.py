@@ -38,8 +38,7 @@ class Parameters(NodeParameters):
     num_averages: int = 100
     min_wait_time_in_ns: int = 16
     max_wait_time_in_ns: int = 100000
-    wait_time_step_in_ns: int = 600
-    flux_point_joint_or_independent_or_arbitrary: Literal["joint", "independent", "arbitrary"] = "independent"
+    wait_time_step_in_ns: int = 2000
     reset_type: Literal["active", "thermal"] = "thermal"
     use_state_discrimination: bool = False
     simulate: bool = False
@@ -54,21 +53,27 @@ node = QualibrationNode(name="05_T1", parameters=Parameters())
 # Class containing tools to help handle units and conversions.
 u = unit(coerce_to_integer=True)
 # Instantiate the QuAM class from the state file
-machine = QuAM.load()
-# Generate the OPX and Octave configurations
-config = machine.generate_config()
+quam = QuAM.load()
+
 # Open Communication with the QOP
-qmm = machine.connect()
+qmm = quam.connect()
 
 # Get the relevant QuAM components
 if node.parameters.qubits is None or node.parameters.qubits == "":
-    qubits = machine.active_qubits
+    qubits = quam.active_qubits
 else:
-    qubits = [machine.qubits[q] for q in node.parameters.qubits.replace(" ", "").split(",")]
+    qubits = [quam.qubits[q] for q in node.parameters.qubits.replace(" ", "").split(",")]
 num_qubits = len(qubits)
 
 
+## Generate the OPX and Octave configurations
 # %% {QUA_program}
+config = quam.generate_config() 
+config = quam.generate_config()
+config['controllers']['con1']['fems'][1]['analog_inputs'][1]['gain_db'] = 30
+for q in quam.qubits:
+    config['elements'][q+'.xy']['thread'] = q
+    config['elements'][q+'.resonator']['thread'] = q
 n_avg = node.parameters.num_averages  # The number of averages
 # Dephasing time sweep (in clock cycles = 4ns) - minimum is 4 clock cycles
 idle_times = np.arange(
@@ -77,14 +82,6 @@ idle_times = np.arange(
     node.parameters.wait_time_step_in_ns // 4,
 )
 
-flux_point = node.parameters.flux_point_joint_or_independent_or_arbitrary  # 'independent' or 'joint'
-if flux_point == "arbitrary":
-    detunings = {q.name: q.arbitrary_intermediate_frequency for q in qubits}
-    arb_flux_bias_offset = {q.name: q.z.arbitrary_offset for q in qubits}
-else:
-    arb_flux_bias_offset = {q.name: 0.0 for q in qubits}
-    detunings = {q.name: 0.0 for q in qubits}
-
 with program() as t1:
     I, I_st, Q, Q_st, n, n_st = qua_declaration(num_qubits=num_qubits)
     t = declare(int)  # QUA variable for the idle time
@@ -92,16 +89,7 @@ with program() as t1:
         state = [declare(int) for _ in range(num_qubits)]
         state_st = [declare_stream() for _ in range(num_qubits)]
     for i, qubit in enumerate(qubits):
-
-        # Bring the active qubits to the desired frequency point
-        if flux_point == "independent":
-            machine.apply_all_flux_to_min()
-            qubit.z.to_independent_idle()
-        elif flux_point == "joint" or "arbitrary":
-            machine.apply_all_flux_to_joint_idle()
-        else:
-            machine.apply_all_flux_to_zero()
-
+        align()
         with for_(n, 0, n < n_avg, n + 1):
             save(n, n_st)
             with for_(*from_array(t, idle_times)):
@@ -113,13 +101,7 @@ with program() as t1:
 
                 qubit.xy.play("x180")
                 qubit.align()
-                qubit.z.wait(20)
-                qubit.z.play(
-                    "const",
-                    amplitude_scale=arb_flux_bias_offset[qubit.name] / qubit.z.operations["const"].amplitude,
-                    duration=t,
-                )
-                qubit.z.wait(20)
+                qubit.wait(t)
                 qubit.align()
 
                 # Measure the state of the resonators
@@ -159,7 +141,7 @@ if node.parameters.simulate:
     plt.tight_layout()
     # Save the figure
     node.results = {"figure": plt.gcf()}
-    node.machine = machine
+    node.machine = quam
     node.save()
 
 else:
@@ -245,6 +227,9 @@ else:
 
     # %% {Save_results}
     node.results["initial_parameters"] = node.parameters.model_dump()
-    node.machine = machine
+    node.machine = quam
     node.save()
+    quam.save()
 
+
+# %%

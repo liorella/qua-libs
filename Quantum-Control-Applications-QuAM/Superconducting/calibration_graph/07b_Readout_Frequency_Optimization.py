@@ -20,7 +20,8 @@ Next steps before going to the next node:
 # %% {Imports}
 from qualibrate import QualibrationNode, NodeParameters
 from quam_libs.components import QuAM
-from quam_libs.lib.qua_datasets import convert_IQ_to_V
+from quam_libs.macros import qua_declaration, active_reset
+from quam_libs.lib.qua_datasets import apply_angle, subtract_slope, convert_IQ_to_V, gradient
 from quam_libs.lib.plot_utils import QubitGrid, grid_iter
 from quam_libs.lib.save_utils import fetch_results_as_xarray
 from qualang_tools.results import progress_counter, fetching_tool
@@ -38,12 +39,12 @@ import numpy as np
 class Parameters(NodeParameters):
 
     qubits: Optional[List[str]] = None
-    num_averages: int = 100
-    frequency_span_in_mhz: float = 10
-    frequency_step_in_mhz: float = 0.1
-    flux_point_joint_or_independent: Literal["joint", "independent"] = "independent"
+    num_averages: int = 500
+    frequency_span_in_mhz: float = 40
+    frequency_step_in_mhz: float = 0.5
     simulate: bool = False
     simulation_duration_ns: int = 2500
+    reset_type_thermal_or_active: Literal["thermal", "active"] = "thermal"
     timeout: int = 100
 
 
@@ -54,27 +55,31 @@ node = QualibrationNode(name="07b_Readout_Frequency_Optimization", parameters=Pa
 # Class containing tools to help handling units and conversions.
 u = unit(coerce_to_integer=True)
 # Instantiate the QuAM class from the state file
-machine = QuAM.load()
+quam = QuAM.load()
 # Generate the OPX and Octave configurations
-config = machine.generate_config()
 # Open Communication with the QOP
-qmm = machine.connect()
+qmm = quam.connect()
 
 # Get the relevant QuAM components
 if node.parameters.qubits is None or node.parameters.qubits == "":
-    qubits = machine.active_qubits
+    qubits = quam.active_qubits
 else:
-    qubits = [machine.qubits[q] for q in node.parameters.qubits]
+    qubits = [quam.qubits[q] for q in node.parameters.qubits]
 num_qubits = len(qubits)
 
 
 # %% {QUA_program}
+config = quam.generate_config()
+config['controllers']['con1']['fems'][1]['analog_inputs'][1]['gain_db'] = 30
+for q in quam.qubits:
+    config['elements'][q+'.xy']['thread'] = q
+    config['elements'][q+'.resonator']['thread'] = q
 n_avg = node.parameters.num_averages  # The number of averages
+reset_type = node.parameters.reset_type_thermal_or_active  # "active" or "thermal"
 # The frequency sweep around the resonator resonance frequency
 span = node.parameters.frequency_span_in_mhz * u.MHz
 step = node.parameters.frequency_step_in_mhz * u.MHz
 dfs = np.arange(-span / 2, +span / 2, step)
-flux_point = node.parameters.flux_point_joint_or_independent
 
 with program() as ro_freq_opt:
     n = declare(int)
@@ -90,23 +95,17 @@ with program() as ro_freq_opt:
     n_st = declare_stream()
 
     for i, qubit in enumerate(qubits):
-
-        # Bring the active qubits to the desired frequency point
-        if flux_point == "independent":
-            machine.apply_all_flux_to_min()
-            qubit.z.to_independent_idle()
-        elif flux_point == "joint":
-            machine.apply_all_flux_to_joint_idle()
-        else:
-            machine.apply_all_flux_to_zero()
-
+        align()
         with for_(n, 0, n < n_avg, n + 1):
             save(n, n_st)
             with for_(*from_array(df, dfs)):
                 # Update the resonator frequencies
                 update_frequency(qubit.resonator.name, df + qubit.resonator.intermediate_frequency)
-                # Wait for the qubits to decay to the ground state
-                wait(qubit.thermalization_time * u.ns)
+                # Initialize the qubits
+                if reset_type == "active":
+                    active_reset(qubit, "readout", readout_pulse_name='readout')
+                else:
+                    wait(qubit.thermalization_time * u.ns)
                 align()
                 # Measure the state of the resonators
                 qubit.resonator.measure("readout", qua_vars=(I_g[i], Q_g[i]))
@@ -153,7 +152,7 @@ if node.parameters.simulate:
     plt.tight_layout()
     # Save the figure
     node.results = {"figure": plt.gcf()}
-    node.machine = machine
+    node.machine = quam
     node.save()
 
 else:
@@ -169,12 +168,24 @@ else:
     ds = fetch_results_as_xarray(job.result_handles, qubits, {"freq": dfs})
     # Convert IQ data into volts
     ds = convert_IQ_to_V(ds, qubits, ["I_g", "Q_g", "I_e", "Q_e"])
+        # ds = ds.assign({"phase": subtract_slope(apply_angle(ds.I + 1j * ds.Q, dim="freq"), dim="freq")})
+    # ds = ds.assign({"group_delay": gradient(ds.phase, dim="freq")})
     # Derive the amplitude IQ_abs = sqrt(I**2 + Q**2) for |g> and |e> as well as the distance between the two blobs D
     ds = ds.assign(
         {
             "D": np.sqrt((ds.I_g - ds.I_e) ** 2 + (ds.Q_g - ds.Q_e) ** 2),
             "IQ_abs_g": np.sqrt(ds.I_g**2 + ds.Q_g**2),
             "IQ_abs_e": np.sqrt(ds.I_e**2 + ds.Q_e**2),
+            "phase_g": subtract_slope(apply_angle(ds.I_g + 1j * ds.Q_g, dim="freq"), dim="freq"),
+            "phase_e": subtract_slope(apply_angle(ds.I_e + 1j * ds.Q_e, dim="freq"), dim="freq"),
+            
+        }
+    )
+    ds = ds.assign(
+        {
+            "group_delay_g": gradient(ds.phase_g, dim="freq"),
+            "group_delay_e": gradient(ds.phase_e, dim="freq"),
+
         }
     )
     # Add the absolute frequency to the dataset
@@ -182,7 +193,7 @@ else:
         {
             "freq_full": (
                 ["qubit", "freq"],
-                np.array([dfs + q.resonator.RF_frequency for q in qubits]),
+                np.array([dfs + q.resonator.intermediate_frequency + quam.ports.mw_outputs['con1'][1][1].upconverter_frequency for q in qubits]),
             )
         }
     )
@@ -239,6 +250,64 @@ else:
     plt.show()
     node.results["figure2"] = grid.fig
 
+    grid = QubitGrid(ds, [q.grid_location for q in qubits])
+    for ax, qubit in grid_iter(grid):
+        (ds.assign_coords(freq_MHz=ds.freq / 1e6).phase_g.loc[qubit]).plot(ax=ax, x="freq_MHz", label="g.s")
+        (ds.assign_coords(freq_MHz=ds.freq / 1e6).phase_e.loc[qubit]).plot(ax=ax, x="freq_MHz", label="e.s")
+        ax.axvline(
+            fit_results[qubit["qubit"]]["detuning"] / 1e6,
+            color="red",
+            linestyle="--",
+            label="applied detuning",
+        )
+        ax.set_xlabel("Detuning [MHz]")
+        ax.set_ylabel("phase [rad]")
+        ax.legend(loc="upper left")
+    plt.tight_layout()
+    plt.show()
+    node.results["figure3"] = grid.fig
+
+    grid = QubitGrid(ds, [q.grid_location for q in qubits])
+    for ax, qubit in grid_iter(grid):
+        (ds.assign_coords(freq_MHz=ds.freq / 1e6).group_delay_g.loc[qubit]).plot(ax=ax, x="freq_MHz", label="g.s")
+        (ds.assign_coords(freq_MHz=ds.freq / 1e6).group_delay_e.loc[qubit]).plot(ax=ax, x="freq_MHz", label="e.s")
+        ax.axvline(
+            fit_results[qubit["qubit"]]["detuning"] / 1e6,
+            color="red",
+            linestyle="--",
+            label="applied detuning",
+        )
+        ax.set_xlabel("Detuning [MHz]")
+        ax.set_ylabel("Group delay [a.u]")
+        ax.legend(loc="upper left")
+    plt.tight_layout()
+    plt.show()
+    node.results["figure3"] = grid.fig
+
+    #%% 
+
+    ds_min_eg = ds[['group_delay_g', 'group_delay_e']].to_dataarray().idxmin('freq').to_dataset(dim='qubit')
+    for q in quam.active_qubits:
+        ds_min_eg[q.id] += q.resonator.intermediate_frequency + quam.ports.mw_outputs['con1'][1][1].upconverter_frequency
+
+    resonator_freq = {q.id: q.resonator.intermediate_frequency + quam.ports.mw_outputs['con1'][1][1].upconverter_frequency
+                      for q in quam.active_qubits}
+
+
+    fig, ax = plt.subplots(len(qubits), 1, sharex=True, sharey=True, figsize=(5, 8))
+    for i, qubit in enumerate(qubits):
+        dsq = ds.sel(qubit=qubit.id)
+        ax[i].plot(dsq.freq_full, dsq.group_delay_g, label='g.s')
+        ax[i].plot(dsq.freq_full, dsq.group_delay_e, label='e.s')
+        ax[i].set_xlabel('freq [GHz]')
+        ax[i].set_ylabel('group delay')
+        ax[i].set_title(qubit.id)
+        ax[i].legend()
+        yl = ax[i].get_ylim()
+        # ax[i].plot([ds_min_eg[qubit.id], ds_min_eg[qubit.id]] , yl, 'r--')
+        ax[i].plot([resonator_freq[qubit.id], resonator_freq[qubit.id]], yl, 'g--')
+
+    fig.tight_layout()
     # %% {Update_state}
     for q in qubits:
         with node.record_state_updates():
@@ -248,6 +317,9 @@ else:
     # %% {Save_results}
     node.outcomes = {q.name: "successful" for q in qubits}
     node.results["initial_parameters"] = node.parameters.model_dump()
-    node.machine = machine
+    node.machine = quam
     node.save()
+    quam.save()
 
+
+# %%

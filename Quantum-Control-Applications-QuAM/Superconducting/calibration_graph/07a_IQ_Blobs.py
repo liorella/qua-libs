@@ -46,7 +46,6 @@ class Parameters(NodeParameters):
     qubits: Optional[List[str]] = None
     num_runs: int = 2000
     reset_type_thermal_or_active: Literal["thermal", "active"] = "thermal"
-    flux_point_joint_or_independent: Literal["joint", "independent"] = "independent"
     operation_name: str = "readout"  # or "readout_QND"
     simulate: bool = False
     simulation_duration_ns: int = 2500
@@ -60,45 +59,41 @@ node = QualibrationNode(name="07a_IQ_Blobs", parameters=Parameters())
 # Class containing tools to help handling units and conversions.
 u = unit(coerce_to_integer=True)
 # Instantiate the QuAM class from the state file
-machine = QuAM.load()
-# Generate the OPX and Octave configurations
-config = machine.generate_config()
+quam = QuAM.load()
 # Open Communication with the QOP
-qmm = machine.connect()
+qmm = quam.connect()
 
 # Get the relevant QuAM components
 if node.parameters.qubits is None or node.parameters.qubits == "":
-    qubits = machine.active_qubits
+    qubits = quam.active_qubits
 else:
-    qubits = [machine.qubits[q] for q in node.parameters.qubits]
+    qubits = [quam.qubits[q] for q in node.parameters.qubits]
 num_qubits = len(qubits)
 
 
 # %% {QUA_program}
+# Generate the OPX and Octave configurations
+config = quam.generate_config()
+config['controllers']['con1']['fems'][1]['analog_inputs'][1]['gain_db'] = 30
+for q in quam.qubits:
+    config['elements'][q+'.xy']['thread'] = q
+    config['elements'][q+'.resonator']['thread'] = q
+
 n_runs = node.parameters.num_runs  # Number of runs
-flux_point = node.parameters.flux_point_joint_or_independent  # 'independent' or 'joint'
 reset_type = node.parameters.reset_type_thermal_or_active  # "active" or "thermal"
 operation_name = node.parameters.operation_name
+
 with program() as iq_blobs:
     I_g, I_g_st, Q_g, Q_g_st, n, n_st = qua_declaration(num_qubits=num_qubits)
     I_e, I_e_st, Q_e, Q_e_st, _, _ = qua_declaration(num_qubits=num_qubits)
 
     for i, qubit in enumerate(qubits):
-
-        # Bring the active qubits to the desired frequency point
-        if flux_point == "independent":
-            machine.apply_all_flux_to_min()
-            qubit.z.to_independent_idle()
-        elif flux_point == "joint" or "arbitrary":
-            machine.apply_all_flux_to_joint_idle()
-        else:
-            machine.apply_all_flux_to_zero()
-
+        align()
         with for_(n, 0, n < n_runs, n + 1):
             # ground iq blobs for all qubits
             save(n, n_st)
             if reset_type == "active":
-                active_reset(qubit, "readout")
+                active_reset(qubit, "readout", readout_pulse_name='readout')
             elif reset_type == "thermal":
                 qubit.wait(qubit.thermalization_time * u.ns)
             else:
@@ -114,7 +109,7 @@ with program() as iq_blobs:
             qubit.align()
             # excited iq blobs for all qubits
             if reset_type == "active":
-                active_reset(qubit, "readout")
+                active_reset(qubit, "readout", readout_pulse_name='readout')
             elif reset_type == "thermal":
                 qubit.wait(qubit.thermalization_time * u.ns)
             else:
@@ -154,7 +149,7 @@ if node.parameters.simulate:
     plt.tight_layout()
     # Save the figure
     node.results = {"figure": plt.gcf()}
-    node.machine = machine
+    node.machine = quam
     node.save()
 
 else:
@@ -324,6 +319,8 @@ else:
     # %% {Save_results}
     node.outcomes = {q.name: "successful" for q in qubits}
     node.results["initial_parameters"] = node.parameters.model_dump()
-    node.machine = machine
+    node.machine = quam
     node.save()
+    quam.save()
 
+# %%

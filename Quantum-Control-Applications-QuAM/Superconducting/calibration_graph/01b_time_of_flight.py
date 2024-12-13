@@ -1,3 +1,4 @@
+#%%
 """
         TIME OF FLIGHT
 This sequence involves sending a readout pulse and capturing the raw ADC traces.
@@ -72,6 +73,8 @@ for q in qubits:
 
 # Generate the OPX and Octave configurations
 config = machine.generate_config()
+config['controllers']['con1']['fems'][1]['analog_inputs'][1]['gain_db'] = 30
+
 # Open Communication with the QOP
 qmm = machine.connect()
 
@@ -97,10 +100,8 @@ with program() as raw_trace_prog:
             # TODO: what about MW-fem?
             # Will save average:
             adc_st[i].input1().average().save(f"adcI{i + 1}")
-            adc_st[i].input2().average().save(f"adcQ{i + 1}")
             # Will save only last run:
             adc_st[i].input1().save(f"adc_single_runI{i + 1}")
-            adc_st[i].input2().save(f"adc_single_runQ{i + 1}")
 
 
 # %% {Simulate_or_execute}

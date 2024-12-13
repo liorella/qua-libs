@@ -47,8 +47,7 @@ class Parameters(NodeParameters):
     max_amp_factor: float = 2.0
     amp_factor_step: float = 0.05
     max_number_pulses_per_sweep: int = 1
-    flux_point_joint_or_independent: Literal["joint", "independent"] = "independent"
-    reset_type_thermal_or_active: Literal["thermal", "active"] = "thermal"
+    reset_type_thermal_or_active: Literal["thermal", "active"] = "active"
     simulate: bool = False
     simulation_duration_ns: int = 2500
     timeout: int = 100
@@ -61,12 +60,12 @@ node = QualibrationNode(name="09c_DRAG_Calibration_180_90", parameters=Parameter
 # Class containing tools to help handling units and conversions.
 u = unit(coerce_to_integer=True)
 # Instantiate the QuAM class from the state file
-machine = QuAM.load()
+quam = QuAM.load()
 # Generate the OPX and Octave configurations
 if node.parameters.qubits is None or node.parameters.qubits == "":
-    qubits = machine.active_qubits
+    qubits = quam.active_qubits
 else:
-    qubits = [machine.qubits[q] for q in node.parameters.qubits]
+    qubits = [quam.qubits[q] for q in node.parameters.qubits]
 num_qubits = len(qubits)
 
 # Update the readout power to match the desired range, this change will be reverted at the end of the node.
@@ -76,14 +75,17 @@ for q in qubits:
         q.xy.operations["x180"].alpha = -1.0
         tracked_qubits.append(q)
 
-config = machine.generate_config()
 # Open Communication with the QOP
-qmm = machine.connect()
+qmm = quam.connect()
 
 
 # %% {QUA_program}
+config = quam.generate_config()
+config['controllers']['con1']['fems'][1]['analog_inputs'][1]['gain_db'] = 30
+for q in quam.qubits:
+    config['elements'][q+'.xy']['thread'] = q
+    config['elements'][q+'.resonator']['thread'] = q
 n_avg = node.parameters.num_averages  # The number of averages
-flux_point = node.parameters.flux_point_joint_or_independent  # 'independent' or 'joint'
 reset_type = node.parameters.reset_type_thermal_or_active  # "active" or "thermal"
 operation = node.parameters.operation  # The qubit operation to play
 # Pulse amplitude sweep (as a pre-factor of the qubit pulse amplitude) - must be within [-2; 2)
@@ -102,14 +104,6 @@ with program() as drag_calibration:
     count = declare(int)  # QUA variable for counting the qubit pulses
 
     for i, qubit in enumerate(qubits):
-        # Bring the active qubits to the desired frequency point
-        if flux_point == "independent":
-            machine.apply_all_flux_to_min()
-            qubit.z.to_independent_idle()
-        elif flux_point == "joint":
-            machine.apply_all_flux_to_joint_idle()
-        else:
-            machine.apply_all_flux_to_zero()
 
         with for_(n, 0, n < n_avg, n + 1):
             save(n, n_st)
@@ -117,7 +111,7 @@ with program() as drag_calibration:
                 with for_(*from_array(a, amps)):
                     # Initialize the qubits
                     if reset_type == "active":
-                        active_reset(qubit, "readout")
+                        active_reset(qubit, "readout", readout_pulse_name='readout')
                     else:
                         qubit.wait(qubit.thermalization_time * u.ns)
 
@@ -156,7 +150,7 @@ if node.parameters.simulate:
     plt.tight_layout()
     # Save the figure
     node.results = {"figure": plt.gcf()}
-    node.machine = machine
+    node.machine = quam
     node.save()
 
 else:
@@ -222,5 +216,6 @@ else:
 
     # %% {Save_results}
     node.results["initial_parameters"] = node.parameters.model_dump()
-    node.machine = machine
+    node.machine = quam
     node.save()
+    quam.save()

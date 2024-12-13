@@ -129,6 +129,15 @@ def unrotate_phase(da: xr.DataArray, dim: str) -> xr.DataArray:
     return xr.apply_ufunc(unrotate, da, input_core_dims=[[dim]], output_core_dims=[[dim]])
 
 
+def gradient(da: xr.DataArray, dim: str) -> xr.DataArray:
+    x = da[dim]
+
+    def grad(arr):
+        return np.apply_along_axis(np.gradient, -1, arr)
+    
+    return xr.apply_ufunc(grad, da, input_core_dims=[[dim]], output_core_dims=[[dim]])
+
+
 def integer_histogram(da: xr.DataArray, dim: str, minlength: Optional[int] = None) -> xr.DataArray:
     """Calculate histogram of non-negative integer values of data array along
     a dimension.

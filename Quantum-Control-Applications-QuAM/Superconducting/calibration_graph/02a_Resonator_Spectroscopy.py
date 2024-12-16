@@ -58,10 +58,10 @@ assert not (
 # Class containing tools to help handling units and conversions.
 u = unit(coerce_to_integer=True)
 # Instantiate the QuAM class from the state file
-quam = QuAM.load()
+quam = QuAM.load('/usr/local/google/home/ellior/quam_state/lsp04_v01_glacier/')
 # Generate the OPX and Octave configurations
 config = quam.generate_config()
-config['controllers']['con1']['fems'][1]['analog_inputs'][1]['gain_db'] = 30
+config['controllers']['con1']['fems'][2]['analog_inputs'][1]['gain_db'] = 30
 
 # Open Communication with the QOP
 if node.parameters.load_data_id is None:

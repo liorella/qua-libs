@@ -73,11 +73,8 @@ num_qubits = len(qubits)
 
 
 # %% {QUA_program}
-config = quam.generate_config()
-config['controllers']['con1']['fems'][1]['analog_inputs'][1]['gain_db'] = 30
-for q in quam.qubits:
-    config['elements'][q+'.xy']['thread'] = q
-    config['elements'][q+'.resonator']['thread'] = q
+from utils import generate_and_fix_config, print_qubit_params
+config = generate_and_fix_config(quam)
 n_avg = node.parameters.num_averages  # The number of averages
 N_pi = node.parameters.max_number_rabi_pulses_per_sweep  # Number of applied Rabi pulses sweep
 reset_type = node.parameters.reset_type_thermal_or_active  # "active" or "thermal"

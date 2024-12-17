@@ -55,7 +55,13 @@ class Parameters(NodeParameters):
     timeout: int = 100
 
 
-node = QualibrationNode(name="10a_Single_Qubit_Randomized_Benchmarking", parameters=Parameters(qubits=['q0', 'q1', 'q2', 'q3', 'q4']))
+node = QualibrationNode(name="10a_Single_Qubit_Randomized_Benchmarking__Parallel",
+                        parameters=Parameters(qubits=['q0', 'q1', 'q2', 'q3', 'q4'],
+                        simulate=True,
+                        max_circuit_depth=10,
+                        delta_clifford=2,
+                        simulation_duration_ns=10000,
+                        num_averages=1))
 
 
 # %% {Initialize_QuAM_and_QOP}
@@ -227,16 +233,17 @@ with program() as randomized_benchmarking:
             # Only played the depth corresponding to target_depth
             with if_((depth == 1) | (depth == depth_target)):
                 with for_(n, 0, n < n_avg, n + 1):
+                    
+                    # align()
+                    # for i, qubit in enumerate(qubits):
+                    #     # Initialize the qubits
+                    #     if reset_type == "active":
+                    #         active_reset(qubit, "readout", readout_pulse_name='readout')
+                    #     else:
+                    #         qubit.resonator.wait(qubit.thermalization_time * u.ns)
+                    
+                    align()
                     for i, qubit in enumerate(qubits):
-                        align()
-                        # Initialize the qubits
-                        if reset_type == "active":
-                            active_reset(qubit, "readout", readout_pulse_name='readout')
-                        else:
-                            qubit.resonator.wait(qubit.thermalization_time * u.ns)
-                        # Align the two elements to play the sequence after qubit initialization
-                        align(qubit.xy.name, qubit.resonator.name)
-                        # The strict_timing ensures that the sequence will be played without gaps
                         if strict_timing:
                             with strict_timing_():
                                 # Play the random sequence of desired depth
@@ -244,7 +251,9 @@ with program() as randomized_benchmarking:
                         else:
                             play_sequence(sequence_list, depth, qubit)
                         # Align the two elements to measure after playing the circuit.
-                        align(qubit.xy.name, qubit.resonator.name)
+                    
+                    align()
+                    for i, qubit in enumerate(qubits):
                         # Make sure you updated the ge_threshold and angle if you want to use state discrimination
                         qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
                         # Make sure you updated the ge_threshold
@@ -271,7 +280,7 @@ with program() as randomized_benchmarking:
 
 # %% {Simulate_or_execute}
 if node.parameters.simulate:
-    simulation_config = SimulationConfig(duration=100_000)  # in clock cycles
+    simulation_config = SimulationConfig(duration=node.parameters.simulation_duration_ns//4)  # in clock cycles
     job = qmm.simulate(config, randomized_benchmarking, simulation_config)
     samples = job.get_simulated_samples()
     fig, ax = plt.subplots(nrows=len(samples.keys()), sharex=True)
@@ -376,3 +385,7 @@ if not node.parameters.simulate:
     node.machine = quam
     node.save()
 
+
+# %%
+
+job.plot_waveform_report_with_simulated_samples()

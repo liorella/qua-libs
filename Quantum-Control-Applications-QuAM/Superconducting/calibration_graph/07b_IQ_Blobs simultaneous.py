@@ -43,7 +43,7 @@ import xarray as xr
 # %% {Node_parameters}
 class Parameters(NodeParameters):
 
-    qubits: Optional[List[str]] = ['q0', 'q3']
+    qubits: Optional[List[str]] = None
     num_runs: int = 2000
     reset_type_thermal_or_active: Literal["thermal", "active"] = "thermal"
     operation_name: str = "readout"  # or "readout_QND"
@@ -52,7 +52,7 @@ class Parameters(NodeParameters):
     timeout: int = 100
 
 
-node = QualibrationNode(name="07a_IQ_Blobs", parameters=Parameters())
+node = QualibrationNode(name="07b_IQ_Blobs_simultaneous", parameters=Parameters())
 
 
 # %% {Initialize_QuAM_and_QOP}
@@ -73,11 +73,8 @@ num_qubits = len(qubits)
 
 # %% {QUA_program}
 # Generate the OPX and Octave configurations
-config = quam.generate_config()
-config['controllers']['con1']['fems'][1]['analog_inputs'][1]['gain_db'] = 12
-for q in quam.qubits:
-    config['elements'][q+'.xy']['thread'] = q
-    config['elements'][q+'.resonator']['thread'] = q
+from utils import generate_and_fix_config, print_qubit_params
+config = generate_and_fix_config(quam)
 
 n_runs = node.parameters.num_runs  # Number of runs
 reset_type = node.parameters.reset_type_thermal_or_active  # "active" or "thermal"

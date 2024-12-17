@@ -80,11 +80,8 @@ qmm = quam.connect()
 
 
 # %% {QUA_program}
-config = quam.generate_config()
-config['controllers']['con1']['fems'][1]['analog_inputs'][1]['gain_db'] = 30
-for q in quam.qubits:
-    config['elements'][q+'.xy']['thread'] = q
-    config['elements'][q+'.resonator']['thread'] = q
+from utils import generate_and_fix_config, print_qubit_params
+config = generate_and_fix_config(quam)
 n_avg = node.parameters.num_averages  # The number of averages
 reset_type = node.parameters.reset_type_thermal_or_active  # "active" or "thermal"
 operation = node.parameters.operation  # The qubit operation to play

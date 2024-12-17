@@ -38,9 +38,9 @@ import numpy as np
 
 # %% {Node_parameters}
 class Parameters(NodeParameters):
-    qubits: Optional[List[str]] = ['q0', 'q1']
+    qubits: Optional[List[str]] = None
     num_averages: int = 10
-    operation: str = "x180"
+    operation: str = "x90"
     min_amp_factor: float = 0.0001
     max_amp_factor: float = 2.0
     amp_factor_step: float = 0.02
@@ -49,9 +49,10 @@ class Parameters(NodeParameters):
     simulate: bool = False
     simulation_duration_ns: int = 2500
     timeout: int = 100
+    baseline_alpha: float = -1.0
 
 
-node = QualibrationNode(name="09b_DRAG_Calibration_180_minus_180", parameters=Parameters())
+node = QualibrationNode(name="09b_DRAG_Calibration_180_minus_180", parameters=Parameters(baseline_alpha=-2))
 
 
 # %% {Initialize_QuAM_and_QOP}
@@ -71,7 +72,7 @@ num_qubits = len(qubits)
 tracked_qubits = []
 for q in qubits:
     with tracked_updates(q, auto_revert=False, dont_assign_to_none=True) as q:
-        q.xy.operations[operation].alpha = -1.0
+        q.xy.operations[operation].alpha = node.parameters.baseline_alpha
         tracked_qubits.append(q)
 
 # Open Communication with the QOP
@@ -86,11 +87,8 @@ num_qubits = len(qubits)
 
 # %% {QUA_program}
 
-config = quam.generate_config()
-config['controllers']['con1']['fems'][1]['analog_inputs'][1]['gain_db'] = 30
-for q in quam.qubits:
-    config['elements'][q+'.xy']['thread'] = q
-    config['elements'][q+'.resonator']['thread'] = q
+from utils import generate_and_fix_config, print_qubit_params
+config = generate_and_fix_config(quam)
 
 n_avg = node.parameters.num_averages  # The number of averages
 reset_type = node.parameters.reset_type_thermal_or_active
@@ -226,7 +224,13 @@ else:
     with node.record_state_updates():
         for q in qubits:
             q.xy.operations[operation].alpha = fit_results[q.name]["alpha"]
-
+    print(print_qubit_params(quam, [['xy', 'operations', 'x180', 'alpha'],
+                                    ['xy', 'operations', 'x90', 'alpha'],
+                                    ['xy', 'operations', 'y180', 'alpha'],
+                                    ['xy', 'operations', 'y90', 'alpha'],
+                                    ['xy', 'operations', '-x90', 'alpha'],
+                                    [ 'xy', 'operations', '-y90', 'alpha']
+                                    ]))
     # %% {Save_results}
     node.outcomes = {q.name: "successful" for q in qubits}
     node.results["initial_parameters"] = node.parameters.model_dump()

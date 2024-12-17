@@ -39,8 +39,8 @@ import numpy as np
 class Parameters(NodeParameters):
 
     qubits: Optional[List[str]] = None
-    num_averages: int = 500
-    frequency_span_in_mhz: float = 40
+    num_averages: int = 1000
+    frequency_span_in_mhz: float = 20
     frequency_step_in_mhz: float = 0.5
     simulate: bool = False
     simulation_duration_ns: int = 2500
@@ -69,11 +69,8 @@ num_qubits = len(qubits)
 
 
 # %% {QUA_program}
-config = quam.generate_config()
-config['controllers']['con1']['fems'][1]['analog_inputs'][1]['gain_db'] = 30
-for q in quam.qubits:
-    config['elements'][q+'.xy']['thread'] = q
-    config['elements'][q+'.resonator']['thread'] = q
+from utils import generate_and_fix_config, print_qubit_params
+config = generate_and_fix_config(quam)
 n_avg = node.parameters.num_averages  # The number of averages
 reset_type = node.parameters.reset_type_thermal_or_active  # "active" or "thermal"
 # The frequency sweep around the resonator resonance frequency
@@ -193,7 +190,7 @@ else:
         {
             "freq_full": (
                 ["qubit", "freq"],
-                np.array([dfs + q.resonator.intermediate_frequency + quam.ports.mw_outputs['con1'][1][1].upconverter_frequency for q in qubits]),
+                np.array([dfs + q.resonator.intermediate_frequency + quam.ports.mw_outputs['con1'][2][1].upconverter_frequency for q in qubits]),
             )
         }
     )
@@ -288,9 +285,9 @@ else:
 
     ds_min_eg = ds[['group_delay_g', 'group_delay_e']].to_dataarray().idxmin('freq').to_dataset(dim='qubit')
     for q in quam.active_qubits:
-        ds_min_eg[q.id] += q.resonator.intermediate_frequency + quam.ports.mw_outputs['con1'][1][1].upconverter_frequency
+        ds_min_eg[q.id] += q.resonator.intermediate_frequency + quam.ports.mw_outputs['con1'][2][1].upconverter_frequency
 
-    resonator_freq = {q.id: q.resonator.intermediate_frequency + quam.ports.mw_outputs['con1'][1][1].upconverter_frequency
+    resonator_freq = {q.id: q.resonator.intermediate_frequency + quam.ports.mw_outputs['con1'][2][1].upconverter_frequency
                       for q in quam.active_qubits}
 
 
@@ -314,12 +311,12 @@ else:
             q.resonator.intermediate_frequency += int(fit_results[q.name]["detuning"])
             q.chi = float(fit_results[q.name]["chi"])
 
+    print_qubit_params(quam, [['chi']])
     # %% {Save_results}
     node.outcomes = {q.name: "successful" for q in qubits}
     node.results["initial_parameters"] = node.parameters.model_dump()
     node.machine = quam
     node.save()
-    quam.save()
 
 
 # %%

@@ -41,10 +41,10 @@ import numpy as np
 
 # %% {Node_parameters}
 class Parameters(NodeParameters):
-    qubits: Optional[List[str]] = ['q0', 'q1', 'q2']
+    qubits: Optional[List[str]] = None
     num_averages: int = 20
     operation: str = "x90"
-    frequency_span_in_mhz: float = 20
+    frequency_span_in_mhz: float = 5
     frequency_step_in_mhz: float = 0.02
     max_number_pulses_per_sweep: int = 20
     reset_type_thermal_or_active: Literal["thermal", "active"] = "active"
@@ -85,11 +85,8 @@ qmm = quam.connect()
 
 
 # %% {QUA_program}
-config = quam.generate_config()
-config['controllers']['con1']['fems'][1]['analog_inputs'][1]['gain_db'] = 30
-for q in quam.qubits:
-    config['elements'][q+'.xy']['thread'] = q
-    config['elements'][q+'.resonator']['thread'] = q
+from utils import generate_and_fix_config, print_qubit_params
+config = generate_and_fix_config(quam)
 n_avg = node.parameters.num_averages  # The number of averages
 reset_type = node.parameters.reset_type_thermal_or_active  # "active" or "thermal"
 # Pulse frequency sweep

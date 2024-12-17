@@ -18,6 +18,8 @@ Next steps before going to the next node:
 
 
 # %% {Imports}
+from utils import generate_and_fix_config
+from utils import print_qubit_params
 from qualibrate import QualibrationNode, NodeParameters
 from quam_libs.components import QuAM
 from quam_libs.macros import qua_declaration
@@ -59,9 +61,15 @@ node = QualibrationNode(name="04_Power_Rabi", parameters=Parameters())
 u = unit(coerce_to_integer=True)
 # Instantiate the QuAM class from the state file
 quam = QuAM.load()
-for q_name, q in quam.qubits.items():
-    q.xy.opx_output.full_scale_power_dbm = -2
-    
+# for q_name, q in quam.qubits.items():
+#     q.xy.opx_output.full_scale_power_dbm = 10
+#     q.xy.operations[node.parameters.operation].length = 60
+
+# print(print_qubit_params(quam, [['xy', 'operations', 'x180', 'amplitude'],
+#                           ['xy', 'operations', 'x180', 'length'],
+#                           ['thermalization_time'],
+#                           ['T1'],
+#                           ['xy', 'opx_output', 'full_scale_power_dbm']]))
 # Open Communication with the QOP
 qmm = quam.connect()
 
@@ -74,12 +82,8 @@ num_qubits = len(qubits)
 
 
 # %% {QUA_program}
-config = quam.generate_config()
-config['controllers']['con1']['fems'][1]['analog_inputs'][1]['gain_db'] = 30
-for q in quam.qubits:
-    config['elements'][q+'.xy']['thread'] = q
-    config['elements'][q+'.resonator']['thread'] = q
-    
+config = generate_and_fix_config(quam)
+
 operation = node.parameters.operation  # The qubit operation to play
 n_avg = node.parameters.num_averages  # The number of averages
 # Pulse amplitude sweep (as a pre-factor of the qubit pulse amplitude) - must be within [-2; 2)
@@ -105,32 +109,35 @@ with program() as power_rabi:
             with for_(*from_array(npi, N_pi_vec)):
                 with for_(*from_array(a, amps)):
                     # Loop for error amplification (perform many qubit pulses)
+                    qubit.xy.wait(qubit.thermalization_time * u.ns)
                     with for_(count, 0, count < npi, count + 1):
                         qubit.xy.play(operation, amplitude_scale=a)
                     align()
                     qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
                     save(I[i], I_st[i])
                     save(Q[i], Q_st[i])
-                    qubit.resonator.wait(qubit.thermalization_time * u.ns)
         align()
 
     with stream_processing():
         n_st.save("n")
         for i, qubit in enumerate(qubits):
-            I_st[i].buffer(len(amps)).buffer(np.ceil(N_pi / 2)).average().save(f"I{i + 1}")
-            Q_st[i].buffer(len(amps)).buffer(np.ceil(N_pi / 2)).average().save(f"Q{i + 1}")
+            I_st[i].buffer(len(amps)).buffer(
+                np.ceil(N_pi / 2)).average().save(f"I{i + 1}")
+            Q_st[i].buffer(len(amps)).buffer(
+                np.ceil(N_pi / 2)).average().save(f"Q{i + 1}")
 
 
 # %% {Simulate_or_execute}
 if node.parameters.simulate:
     # Simulates the QUA program for the specified duration
-    simulation_config = SimulationConfig(duration=node.parameters.simulation_duration_ns * 4)  # In clock cycles = 4ns
+    simulation_config = SimulationConfig(
+        duration=node.parameters.simulation_duration_ns * 4)  # In clock cycles = 4ns
     job = qmm.simulate(config, power_rabi, simulation_config)
     # Get the simulated samples and plot them for all controllers
     samples = job.get_simulated_samples()
     fig, ax = plt.subplots(nrows=len(samples.keys()), sharex=True)
     for i, con in enumerate(samples.keys()):
-        plt.subplot(len(samples.keys()),1,i+1)
+        plt.subplot(len(samples.keys()), 1, i+1)
         samples[con].plot()
         plt.title(con)
     plt.tight_layout()
@@ -151,7 +158,8 @@ else:
 
     # %% {Data_fetching_and_dataset_creation}
     # Fetch the data from the OPX and convert it into a xarray with corresponding axes (from most inner to outer loop)
-    ds = fetch_results_as_xarray(job.result_handles, qubits, {"amp": amps, "N": N_pi_vec})
+    ds = fetch_results_as_xarray(job.result_handles, qubits, {
+                                 "amp": amps, "N": N_pi_vec})
     # Convert IQ data into volts
     ds = convert_IQ_to_V(ds, qubits)
     # Add the qubit pulse absolute amplitude to the dataset
@@ -159,7 +167,8 @@ else:
         {
             "abs_amp": (
                 ["qubit", "amp"],
-                np.array([q.xy.operations[operation].amplitude * amps for q in qubits]),
+                np.array(
+                    [q.xy.operations[operation].amplitude * amps for q in qubits]),
             )
         }
     )
@@ -167,7 +176,7 @@ else:
     node.results = {"ds": ds}
 
     # %% {Data_analysis}
-    max_pi_amp = 0.6
+    max_pi_amp = 0.8
     fit_results = {}
     if N_pi == 1:
         # Fit the power Rabi oscillations
@@ -189,12 +198,13 @@ else:
             factor = float(1.0 * (np.pi - phi_fit) / (2 * np.pi * f_fit))
             new_pi_amp = q.xy.operations[operation].amplitude * factor
             if new_pi_amp < max_pi_amp:
-                print(f"amplitude for Pi pulse is modified by a factor of {factor:.2f}")
+                print(
+                    f"amplitude for Pi pulse is modified by a factor of {factor:.2f}")
                 print(f"new amplitude is {1e3 * new_pi_amp:.2f} mV \n")
                 fit_results[q.name]["Pi_amplitude"] = new_pi_amp
             else:
-                print(f"Fitted amplitude too high, new amplitude is 300 mV \n")
-                fit_results[q.name]["Pi_amplitude"] =max_pi_amp
+                print(f"Fitted amplitude too high, new amplitude is 800 mV \n")
+                fit_results[q.name]["Pi_amplitude"] = max_pi_amp
         node.results["fit_results"] = fit_results
 
     elif N_pi > 1:
@@ -207,28 +217,34 @@ else:
 
         # Save fitting results
         for q in qubits:
-            new_pi_amp = float(ds.abs_amp.sel(qubit=q.name)[data_max_idx.sel(qubit=q.name)].data)
+            new_pi_amp = float(ds.abs_amp.sel(qubit=q.name)[
+                               data_max_idx.sel(qubit=q.name)].data)
             fit_results[q.name] = {}
             if new_pi_amp < max_pi_amp:  # TODO: 1 for OPX1000 MW
                 fit_results[q.name]["Pi_amplitude"] = new_pi_amp
                 print(
                     f"amplitude for Pi pulse is modified by a factor of {I_n.idxmax(dim='amp').sel(qubit = q.name):.2f}"
                 )
-                print(f"new amplitude is {1e3 * new_pi_amp:.2f} mV \n")  # TODO: 1 for OPX1000 MW
+                # TODO: 1 for OPX1000 MW
+                print(f"new amplitude is {1e3 * new_pi_amp:.2f} mV \n")
             else:
                 print(f"Fitted amplitude too high, new amplitude is 300 mV \n")
-                fit_results[q.name]["Pi_amplitude"] = max_pi_amp  # TODO: 1 for OPX1000 MW
+                # TODO: 1 for OPX1000 MW
+                fit_results[q.name]["Pi_amplitude"] = max_pi_amp
 
     # %% {Plotting}
     grid = QubitGrid(ds, [q.grid_location for q in qubits])
     for ax, qubit in grid_iter(grid):
         if N_pi == 1:
-            (ds.assign_coords(amp_mV=ds.abs_amp * 1e3).loc[qubit].I * 1e3).plot(ax=ax, x="amp_mV")
+            (ds.assign_coords(amp_mV=ds.abs_amp *
+             1e3).loc[qubit].I * 1e3).plot(ax=ax, x="amp_mV")
             ax.plot(ds.abs_amp.loc[qubit] * 1e3, 1e3 * fit_evals.loc[qubit][0])
             ax.set_ylabel("Trans. amp. I [mV]")
         elif N_pi > 1:
-            (ds.assign_coords(amp_mV=ds.abs_amp * 1e3).loc[qubit].I * 1e3).plot(ax=ax, x="amp_mV", y="N")
-            ax.axvline(1e3 * ds.abs_amp.loc[qubit][data_max_idx.loc[qubit]], color="r")
+            (ds.assign_coords(amp_mV=ds.abs_amp *
+             1e3).loc[qubit].I * 1e3).plot(ax=ax, x="amp_mV", y="N")
+            ax.axvline(1e3 * ds.abs_amp.loc[qubit]
+                       [data_max_idx.loc[qubit]], color="r")
             ax.set_ylabel("num. of pulses")
         ax.set_xlabel("Amplitude [mV]")
         ax.set_title(qubit["qubit"])
@@ -249,7 +265,6 @@ else:
     node.results["initial_parameters"] = node.parameters.model_dump()
     node.machine = quam
     node.save()
-    quam.save()
 
 
 # %%

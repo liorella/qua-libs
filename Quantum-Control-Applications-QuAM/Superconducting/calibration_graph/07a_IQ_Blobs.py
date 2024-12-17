@@ -50,6 +50,7 @@ class Parameters(NodeParameters):
     simulate: bool = False
     simulation_duration_ns: int = 2500
     timeout: int = 100
+    measure_thermal_population: bool = False
 
 
 node = QualibrationNode(name="07a_IQ_Blobs", parameters=Parameters())
@@ -73,12 +74,12 @@ num_qubits = len(qubits)
 
 # %% {QUA_program}
 # Generate the OPX and Octave configurations
-config = quam.generate_config()
-config['controllers']['con1']['fems'][1]['analog_inputs'][1]['gain_db'] = 30
-for q in quam.qubits:
-    config['elements'][q+'.xy']['thread'] = q
-    config['elements'][q+'.resonator']['thread'] = q
+from utils import generate_and_fix_config, print_qubit_params
 
+for qn, q in quam.qubits.items():
+    q.resonator.opx_output.full_scale_power_dbm = -11
+
+config = generate_and_fix_config(quam)
 n_runs = node.parameters.num_runs  # Number of runs
 reset_type = node.parameters.reset_type_thermal_or_active  # "active" or "thermal"
 operation_name = node.parameters.operation_name
@@ -115,7 +116,8 @@ with program() as iq_blobs:
             else:
                 raise ValueError(f"Unrecognized reset type {reset_type}.")
             align()
-            qubit.xy.play("x180")
+            if not node.parameters.measure_thermal_population:
+                qubit.xy.play("x180")
             align()
             qubit.resonator.measure(operation_name, qua_vars=(I_e[i], Q_e[i]))
             qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)

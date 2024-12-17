@@ -47,7 +47,7 @@ class Parameters(NodeParameters):
     max_wait_time_in_ns: int = 20000
     num_time_points: int = 200
     log_or_linear_sweep: Literal["log", "linear"] = "linear"
-    reset_type_thermal_or_active: Literal["thermal", "active"] = "active"
+    reset_type_thermal_or_active: Literal["thermal", "active"] = "thermal"
     use_state_discrimination: bool = False
     simulate: bool = False
     simulation_duration_ns: int = 2500
@@ -76,11 +76,8 @@ num_qubits = len(qubits)
 
 
 # %% {QUA_program}
-config = quam.generate_config()
-config['controllers']['con1']['fems'][1]['analog_inputs'][1]['gain_db'] = 30
-for q in quam.qubits:
-    config['elements'][q+'.xy']['thread'] = q
-    config['elements'][q+'.resonator']['thread'] = q
+from utils import generate_and_fix_config, print_qubit_params
+config = generate_and_fix_config(quam)
 n_avg = node.parameters.num_averages  # The number of averages
 reset_type = node.parameters.reset_type_thermal_or_active  # "active" or "thermal"
 # Dephasing time sweep (in clock cycles = 4ns) - minimum is 4 clock cycles

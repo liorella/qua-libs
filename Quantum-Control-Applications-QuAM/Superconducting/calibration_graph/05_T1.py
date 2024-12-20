@@ -35,10 +35,10 @@ import numpy as np
 # %% {Node_parameters}
 class Parameters(NodeParameters):
     qubits: Optional[List[str]] = None
-    num_averages: int = 100
+    num_averages: int = 500
     min_wait_time_in_ns: int = 16
-    max_wait_time_in_ns: int = 100000
-    wait_time_step_in_ns: int = 2000
+    max_wait_time_in_ns: int = 200000
+    wait_time_step_in_ns: int = 4000
     reset_type: Literal["active", "thermal"] = "thermal"
     use_state_discrimination: bool = False
     simulate: bool = False
@@ -212,6 +212,9 @@ else:
     plt.tight_layout()
     plt.show()
     node.results["figure_raw"] = grid.fig
+    for qn, q in quam.qubits.items():
+        print(qn, f'readout duration/T1 = {q.resonator.operations.readout.length*1e-9/q.T1:.4f}')
+
 
     # %% {Update_state}
     with node.record_state_updates():

@@ -39,8 +39,8 @@ import numpy as np
 class Parameters(NodeParameters):
 
     qubits: Optional[List[str]] = None
-    num_averages: int = 1000
-    frequency_span_in_mhz: float = 10.0
+    num_averages: int = 5000
+    frequency_span_in_mhz: float = 30.0
     frequency_step_in_mhz: float = 0.1
     simulate: bool = False
     simulation_duration_ns: int = 2500
@@ -58,10 +58,8 @@ assert not (
 # Class containing tools to help handling units and conversions.
 u = unit(coerce_to_integer=True)
 # Instantiate the QuAM class from the state file
-quam = QuAM.load('/usr/local/google/home/ellior/quam_state/lsp04_v01_glacier/')
+quam = QuAM.load()
 # Generate the OPX and Octave configurations
-config = quam.generate_config()
-config['controllers']['con1']['fems'][2]['analog_inputs'][1]['gain_db'] = 30
 
 # Open Communication with the QOP
 if node.parameters.load_data_id is None:
@@ -99,7 +97,7 @@ with program() as multi_res_spec:
                 # Measure the resonator
                 rr.measure("readout", qua_vars=(I[i], Q[i]))
                 # wait for the resonator to relax
-                rr.wait(quam.depletion_time * u.ns)
+                rr.wait(5 * quam.depletion_time * u.ns)
                 # save data
                 save(I[i], I_st[i])
                 save(Q[i], Q_st[i])
@@ -114,6 +112,8 @@ with program() as multi_res_spec:
 
 
 # %% {Simulate_or_execute}
+from utils import generate_and_fix_config
+config = generate_and_fix_config(quam)
 if node.parameters.simulate:
     # Simulates the QUA program for the specified duration
     simulation_config = SimulationConfig(duration=node.parameters.simulation_duration_ns * 4)  # In clock cycles = 4ns
@@ -205,7 +205,7 @@ elif node.parameters.load_data_id is None:
     for ax, qubit in grid_iter(grid):
         (ds.assign_coords(freq_MHz=ds.freq / 1e6).loc[qubit].group_delay * 1e3).plot(ax=ax, x="freq_MHz")
         ax.set_xlabel("Resonator detuning [MHz]")
-        ax.set_ylabel("Trans. phase [mrad]")
+        ax.set_ylabel("Trans. group delay [mrad/Hz]")
         ax.set_title(qubit["qubit"])
     grid.fig.suptitle("Resonator spectroscopy (raw data)")
     plt.tight_layout()

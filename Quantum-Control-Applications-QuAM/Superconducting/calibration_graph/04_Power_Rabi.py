@@ -42,7 +42,7 @@ import numpy as np
 class Parameters(NodeParameters):
 
     qubits: Optional[List[str]] = None
-    num_averages: int = 200
+    num_averages: int = 100
     operation: str = "x180"
     min_amp_factor: float = 0.001
     max_amp_factor: float = 2.0
@@ -53,7 +53,9 @@ class Parameters(NodeParameters):
     timeout: int = 100
 
 
-node = QualibrationNode(name="04_Power_Rabi", parameters=Parameters())
+node = QualibrationNode(name="04_Power_Rabi", parameters=Parameters(
+)
+)
 
 
 # %% {Initialize_QuAM_and_QOP}
@@ -61,15 +63,14 @@ node = QualibrationNode(name="04_Power_Rabi", parameters=Parameters())
 u = unit(coerce_to_integer=True)
 # Instantiate the QuAM class from the state file
 quam = QuAM.load()
-# for q_name, q in quam.qubits.items():
-#     q.xy.opx_output.full_scale_power_dbm = 10
-#     q.xy.operations[node.parameters.operation].length = 60
 
-# print(print_qubit_params(quam, [['xy', 'operations', 'x180', 'amplitude'],
-#                           ['xy', 'operations', 'x180', 'length'],
-#                           ['thermalization_time'],
-#                           ['T1'],
-#                           ['xy', 'opx_output', 'full_scale_power_dbm']]))
+print(print_qubit_params(quam, [
+    ['f_01'],
+    ['xy', 'operations', 'x180', 'amplitude'],
+    ['xy', 'operations', 'x180', 'length'],
+    ['thermalization_time'],
+    ['T1'],
+    ['xy', 'opx_output', 'full_scale_power_dbm']]))
 # Open Communication with the QOP
 qmm = quam.connect()
 

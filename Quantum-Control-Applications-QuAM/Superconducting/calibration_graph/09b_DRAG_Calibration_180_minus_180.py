@@ -21,7 +21,7 @@ Next steps before going to the next node:
 # %% {Imports}
 from qualibrate import QualibrationNode, NodeParameters
 from quam_libs.components import QuAM
-from quam_libs.macros import qua_declaration, active_reset
+from quam_libs.macros import qua_declaration
 from quam_libs.lib.plot_utils import QubitGrid, grid_iter
 from quam_libs.lib.save_utils import fetch_results_as_xarray
 from quam_libs.trackable_object import tracked_updates
@@ -40,7 +40,7 @@ import numpy as np
 class Parameters(NodeParameters):
     qubits: Optional[List[str]] = None
     num_averages: int = 10
-    operation: str = "x90"
+    operation: str = "x180"
     min_amp_factor: float = 0.0001
     max_amp_factor: float = 2.0
     amp_factor_step: float = 0.02
@@ -49,10 +49,11 @@ class Parameters(NodeParameters):
     simulate: bool = False
     simulation_duration_ns: int = 2500
     timeout: int = 100
-    baseline_alpha: float = -1.0
+    baseline_alpha: float = -2.0
 
 
-node = QualibrationNode(name="09b_DRAG_Calibration_180_minus_180", parameters=Parameters(baseline_alpha=-2))
+node = QualibrationNode(name="09b_DRAG_Calibration_180_minus_180", parameters=Parameters(
+    ))  
 
 
 # %% {Initialize_QuAM_and_QOP}
@@ -116,12 +117,7 @@ with program() as drag_calibration:
             save(n, n_st)
             with for_(*from_array(npi, N_pi_vec)):
                 with for_(*from_array(a, amps)):
-                    # Initialize the qubits
-                    if reset_type == "active":
-                        active_reset(qubit, "readout", readout_pulse_name='readout')
-                    else:
-                        qubit.resonator.wait(qubit.thermalization_time * u.ns)
-                    qubit.align()
+                    qubit.reset(reset_type)
                     # Loop for error amplification (perform many qubit pulses)
                     with for_(count, 0, count < npi, count + 1):
                         if operation == "x180":

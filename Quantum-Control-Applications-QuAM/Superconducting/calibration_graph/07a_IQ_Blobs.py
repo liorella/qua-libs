@@ -24,7 +24,7 @@ Next steps before going to the next node:
 # %% {Imports}
 from qualibrate import QualibrationNode, NodeParameters
 from quam_libs.components import QuAM
-from quam_libs.macros import qua_declaration, active_reset
+from quam_libs.macros import qua_declaration
 from quam_libs.lib.qua_datasets import convert_IQ_to_V
 from quam_libs.lib.plot_utils import QubitGrid, grid_iter
 from quam_libs.lib.save_utils import fetch_results_as_xarray
@@ -53,7 +53,11 @@ class Parameters(NodeParameters):
     measure_thermal_population: bool = False
 
 
-node = QualibrationNode(name="07a_IQ_Blobs", parameters=Parameters())
+node = QualibrationNode(name="07a_IQ_Blobs", parameters=Parameters(
+    num_runs=10000,
+    reset_type_thermal_or_active='active',
+    # qubits=['q3', 'q4']
+))
 
 
 # %% {Initialize_QuAM_and_QOP}
@@ -71,15 +75,14 @@ else:
     qubits = [quam.qubits[q] for q in node.parameters.qubits]
 num_qubits = len(qubits)
 
-
+# quam.qubits.q0.resonator.operations.readout.amplitude = 0.055
+# quam.qubits.q0.resonator.operations.readout.length = 2000
+# quam.qubits.q1.resonator.operations.readout.amplitude = 0.08
+# quam.qubits.q3.resonator.operations.readout.amplitude = 0.04
+# quam.qubits.q3.resonator.operations.readout.length = 1000
+# quam.qubits.q4.resonator.operations.readout.amplitude = 0.04
+# quam.qubits.q4.resonator.operations.readout.length = 1600
 # %% {QUA_program}
-# Generate the OPX and Octave configurations
-from utils import generate_and_fix_config, print_qubit_params
-
-for qn, q in quam.qubits.items():
-    q.resonator.opx_output.full_scale_power_dbm = -11
-
-config = generate_and_fix_config(quam)
 n_runs = node.parameters.num_runs  # Number of runs
 reset_type = node.parameters.reset_type_thermal_or_active  # "active" or "thermal"
 operation_name = node.parameters.operation_name
@@ -93,14 +96,7 @@ with program() as iq_blobs:
         with for_(n, 0, n < n_runs, n + 1):
             # ground iq blobs for all qubits
             save(n, n_st)
-            if reset_type == "active":
-                active_reset(qubit, "readout", readout_pulse_name='readout')
-            elif reset_type == "thermal":
-                qubit.wait(qubit.thermalization_time * u.ns)
-            else:
-                raise ValueError(f"Unrecognized reset type {reset_type}.")
-
-            qubit.align()
+            qubit.reset(reset_type)
             qubit.resonator.measure(operation_name, qua_vars=(I_g[i], Q_g[i]))
             qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
             # save data
@@ -109,18 +105,14 @@ with program() as iq_blobs:
 
             qubit.align()
             # excited iq blobs for all qubits
-            if reset_type == "active":
-                active_reset(qubit, "readout", readout_pulse_name='readout')
-            elif reset_type == "thermal":
-                qubit.wait(qubit.thermalization_time * u.ns)
-            else:
-                raise ValueError(f"Unrecognized reset type {reset_type}.")
-            align()
+            qubit.reset(reset_type)
             if not node.parameters.measure_thermal_population:
                 qubit.xy.play("x180")
             align()
             qubit.resonator.measure(operation_name, qua_vars=(I_e[i], Q_e[i]))
             qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
+            if not node.parameters.measure_thermal_population:
+                qubit.xy.play("x180")
             # save data
             save(I_e[i], I_e_st[i])
             save(Q_e[i], Q_e_st[i])
@@ -137,6 +129,8 @@ with program() as iq_blobs:
 
 
 # %% {Simulate_or_execute}
+from utils import generate_and_fix_config, print_qubit_params
+config = generate_and_fix_config(quam)
 if node.parameters.simulate:
     # Simulates the QUA program for the specified duration
     simulation_config = SimulationConfig(duration=node.parameters.simulation_duration_ns * 4)  # In clock cycles = 4ns
@@ -183,7 +177,16 @@ else:
     # Convert IQ data into volts
     ds = convert_IQ_to_V(ds, qubits, ["I_g", "Q_g", "I_e", "Q_e"])
     # %% {Data_analysis}
+    n_bins = 100
+    hist_I_g = {}
+    hist_Q_g = {}
+    hist_I_e = {}
+    hist_Q_e = {}
+    
     node.results = {"ds": ds, "figs": {}, "results": {}}
+    ds['IQ_g'] = ds.I_g + 1j * ds.Q_g
+    ds['IQ_e'] = ds.I_e + 1j * ds.Q_e
+    
     plot_individual = False
     for q in qubits:
         # Perform two state discrimination
@@ -197,11 +200,17 @@ else:
         )
         # TODO: check the difference between the above and the below
         # Get the rotated 'I' quadrature
-        I_rot = ds.I_g.sel(qubit=q.name) * np.cos(angle) - ds.Q_g.sel(qubit=q.name) * np.sin(angle)
+        IQ_g_rot = ds.IQ_g.sel(qubit=q.name) * np.exp(1j * angle)
+        IQ_e_rot = ds.IQ_e.sel(qubit=q.name) * np.exp(1j * angle)
         # Get the blobs histogram along the rotated axis
-        hist = np.histogram(I_rot, bins=100)
+        hist_I_g[q.name] = np.histogram(np.real(IQ_g_rot), bins=n_bins)
+        hist_Q_g[q.name] = np.histogram(np.imag(IQ_g_rot), bins=n_bins)
+        hist_I_e[q.name] = np.histogram(np.real(IQ_e_rot), bins=n_bins)
+        hist_Q_e[q.name] = np.histogram(np.imag(IQ_e_rot), bins=n_bins)
+
         # Get the discriminating threshold along the rotated axis
-        RUS_threshold = hist[1][1:][np.argmax(hist[0])]
+        RUS_threshold = hist_I_g[q.name][1][1:][np.argmax(hist_I_g[q.name][0])]
+        RUS_pi_threshold = hist_I_e[q.name][1][1:][np.argmax(hist_I_e[q.name][0])]
         # Save the individual figures if requested
         if plot_individual:
             fig = plt.gcf()
@@ -213,51 +222,32 @@ else:
         node.results["results"][q.name]["fidelity"] = float(fidelity)
         node.results["results"][q.name]["confusion_matrix"] = np.array([[gg, ge], [eg, ee]])
         node.results["results"][q.name]["rus_threshold"] = float(RUS_threshold)
+        node.results["results"][q.name]["rus_pi_threshold"] = float(RUS_pi_threshold)
 
     # %% {Plotting}
+    n_avg = n_runs // 2
     grid = QubitGrid(ds, [q.grid_location for q in qubits])
     for ax, qubit in grid_iter(grid):
-        n_avg = n_runs // 2
         qn = qubit["qubit"]
         # TODO: maybe wrap it up in a function plot_IQ_blobs?
-        ax.plot(
-            1e3
-            * (
-                ds.I_g.sel(qubit=qn) * np.cos(node.results["results"][qn]["angle"])
-                - ds.Q_g.sel(qubit=qn) * np.sin(node.results["results"][qn]["angle"])
-            ),
-            1e3
-            * (
-                ds.I_g.sel(qubit=qn) * np.sin(node.results["results"][qn]["angle"])
-                + ds.Q_g.sel(qubit=qn) * np.cos(node.results["results"][qn]["angle"])
-            ),
-            ".",
-            alpha=0.2,
-            label="Ground",
-            markersize=1,
-        )
-        ax.plot(
-            1e3
-            * (
-                ds.I_e.sel(qubit=qn) * np.cos(node.results["results"][qn]["angle"])
-                - ds.Q_e.sel(qubit=qn) * np.sin(node.results["results"][qn]["angle"])
-            ),
-            1e3
-            * (
-                ds.I_e.sel(qubit=qn) * np.sin(node.results["results"][qn]["angle"])
-                + ds.Q_e.sel(qubit=qn) * np.cos(node.results["results"][qn]["angle"])
-            ),
-            ".",
-            alpha=0.2,
-            label="Excited",
-            markersize=1,
-        )
+        ang = node.results["results"][qn]["angle"]
+        IQ_g_rot = ds.IQ_g.sel(qubit=qn) * np.exp(1j * ang)
+        IQ_e_rot = ds.IQ_e.sel(qubit=qn) * np.exp(1j * ang)
+        ax.plot(1e3 * np.real(IQ_g_rot), 1e3 * np.imag(IQ_g_rot), ".", alpha=0.2, label="Ground", markersize=1)
+        ax.plot(1e3 * np.real(IQ_e_rot), 1e3 * np.imag(IQ_e_rot), ".", alpha=0.2, label="Excited", markersize=1)
         ax.axvline(
             1e3 * node.results["results"][qn]["rus_threshold"],
             color="k",
             linestyle="--",
             lw=0.5,
             label="RUS Threshold",
+        )
+        ax.axvline(
+            1e3 * node.results["results"][qn]["rus_pi_threshold"],
+            color="b",
+            linestyle="--",
+            lw=0.5,
+            label="RUS Pi Threshold",
         )
         ax.axvline(
             1e3 * node.results["results"][qn]["threshold"],
@@ -279,7 +269,7 @@ else:
     grid = QubitGrid(ds, [q.grid_location for q in qubits])
     for ax, qubit in grid_iter(grid):
         confusion = node.results["results"][qubit["qubit"]]["confusion_matrix"]
-        ax.imshow(confusion)
+        ax.imshow(confusion, vmin=0, vmax=1)
         ax.set_xticks([0, 1])
         ax.set_yticks([0, 1])
         ax.set_xticklabels(labels=["|g>", "|e>"])
@@ -296,6 +286,59 @@ else:
     plt.tight_layout()
     plt.show()
     node.results["figure_fidelity"] = grid.fig
+
+    # %%
+    grid = QubitGrid(ds, [q.grid_location for q in qubits])
+    for ax, qubit in grid_iter(grid):
+        qn = qubit['qubit']
+        ax.semilogy(1e3*hist_I_g[qn][1][1:], hist_I_g[qn][0] / n_runs, label="Ground")
+        ax.semilogy(1e3*hist_I_e[qn][1][1:], hist_I_e[qn][0] / n_runs, label='Excited')
+        ax.set_title(qn)
+        ax.set_xlabel('I [mV]')
+        ax.grid(which='both', axis='y')
+    
+        ax.axvline(
+            1e3 * node.results["results"][qn]["rus_threshold"],
+            color="k",
+            linestyle="--",
+            lw=0.5,
+            label="RUS Threshold",
+        )
+        ax.axvline(
+            1e3 * node.results["results"][qn]["rus_pi_threshold"],
+            color="b",
+            linestyle="--",
+            lw=0.5,
+            label="RUS Pi Threshold",
+        )
+        ax.axvline(
+            1e3 * node.results["results"][qn]["threshold"],
+            color="r",
+            linestyle="--",
+            lw=0.5,
+            label="Threshold",
+        )
+    grid.fig.suptitle('I quad histogram')
+    grid.fig.tight_layout()
+    node.results['hist_I'] = grid.fig
+
+    grid = QubitGrid(ds, [q.grid_location for q in qubits])
+    for ax, qubit in grid_iter(grid):
+        qn = qubit['qubit']
+        ax.semilogy(1e3*hist_Q_g[qn][1][1:], hist_Q_g[qn][0] / n_runs, label="Ground")
+        ax.semilogy(1e3*hist_Q_e[qn][1][1:], hist_Q_e[qn][0] / n_runs, label='Excited')
+        ax.set_title(qn)
+        ax.set_xlabel('Q [mV]')
+        ax.grid(which='both', axis='y')
+
+
+    grid.fig.suptitle('Q quad histogram')
+    grid.fig.tight_layout()
+    node.results['hist_Q'] = grid.fig
+
+    print_qubit_params(quam, [['resonator', 'operations', 'readout', 'amplitude'],
+                              ['resonator', 'operations', 'readout', 'length'],
+                              ['resonator', 'opx_output', 'full_scale_power_dbm']])
 
     # %% {Update_state}
     with node.record_state_updates():
@@ -315,14 +358,19 @@ else:
                 * qubit.resonator.operations[operation_name].length
                 / 2**12
             )
+            qubit.resonator.rus_pi_threshold = (
+                float(node.results["results"][qubit.name]["rus_pi_threshold"])
+                * qubit.resonator.operations[operation_name].length
+                / 2**12
+            )
             if operation_name == "readout":
                 qubit.resonator.confusion_matrix = node.results["results"][qubit.name]["confusion_matrix"].tolist()
 
     # %% {Save_results}
+    node.results['ds'] = ds.drop_vars(['IQ_g', 'IQ_e'])
     node.outcomes = {q.name: "successful" for q in qubits}
     node.results["initial_parameters"] = node.parameters.model_dump()
     node.machine = quam
     node.save()
-    quam.save()
 
 # %%

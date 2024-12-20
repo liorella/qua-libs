@@ -21,7 +21,7 @@ Next steps before going to the next node:
 # %% {Imports}
 from qualibrate import QualibrationNode, NodeParameters
 from quam_libs.components import QuAM
-from quam_libs.macros import qua_declaration, active_reset
+from quam_libs.macros import qua_declaration
 from quam_libs.lib.plot_utils import QubitGrid, grid_iter
 from quam_libs.lib.save_utils import fetch_results_as_xarray
 from quam_libs.lib.fit import fit_oscillation, oscillation
@@ -42,9 +42,9 @@ class Parameters(NodeParameters):
     qubits: Optional[List[str]] = None
     num_averages: int = 50
     operation_x180_or_any_90: Literal["x180", "x90", "-x90", "y90", "-y90"] = "x180"
-    min_amp_factor: float = 0.8
-    max_amp_factor: float = 1.2
-    amp_factor_step: float = 0.005
+    min_amp_factor: float = 0.9
+    max_amp_factor: float = 1.1
+    amp_factor_step: float = 0.0025
     max_number_rabi_pulses_per_sweep: int = 100
     reset_type_thermal_or_active: Literal["thermal", "active"] = "active"
     simulate: bool = False
@@ -52,7 +52,9 @@ class Parameters(NodeParameters):
     timeout: int = 100
 
 
-node = QualibrationNode(name="08_Power_Rabi_Error_Amplification", parameters=Parameters())
+node = QualibrationNode(name="08_Power_Rabi_Error_Amplification", parameters=Parameters(
+
+))
 
 
 # %% {Initialize_QuAM_and_QOP}
@@ -109,12 +111,7 @@ with program() as power_rabi:
             with for_(*from_array(npi, N_pi_vec)):
                 with for_(*from_array(a, amps)):
                     # Initialize the qubits
-                    if reset_type == "active":
-                        active_reset(qubit, "readout", readout_pulse_name='readout')
-                    else:
-                        wait(qubit.thermalization_time * u.ns)
-
-                    qubit.align()
+                    qubit.reset(reset_type)
                     # Loop for error amplification (perform many qubit pulses)
                     with for_(count, 0, count < npi, count + 1):
                         qubit.xy.play(operation, amplitude_scale=a)

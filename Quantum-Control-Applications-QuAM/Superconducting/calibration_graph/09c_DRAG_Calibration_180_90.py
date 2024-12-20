@@ -22,7 +22,7 @@ Next steps before going to the next node:
 # %% {Imports}
 from qualibrate import QualibrationNode, NodeParameters
 from quam_libs.components import QuAM
-from quam_libs.macros import qua_declaration, active_reset
+from quam_libs.macros import qua_declaration
 from quam_libs.lib.plot_utils import QubitGrid, grid_iter
 from quam_libs.lib.save_utils import fetch_results_as_xarray
 from quam_libs.trackable_object import tracked_updates
@@ -106,11 +106,7 @@ with program() as drag_calibration:
             save(n, n_st)
             for option in [0, 1]:
                 with for_(*from_array(a, amps)):
-                    # Initialize the qubits
-                    if reset_type == "active":
-                        active_reset(qubit, "readout", readout_pulse_name='readout')
-                    else:
-                        qubit.wait(qubit.thermalization_time * u.ns)
+                    qubit.reset(reset_type)
 
                     if option == 0:
                         play("x180" * amp(1, 0, 0, a), qubit.xy.name)

@@ -18,13 +18,11 @@ class ReadoutResonatorBase:
     depletion_time: int = 5000
     frequency_bare: float = None
 
-    f_01: float = None
-    f_12: float = None
     confusion_matrix: list = None
 
     gef_centers: list = None
     gef_confusion_matrix: list = None
-
+    rus_pi_threshold = None # this should be in the pulse but I don't know how to put it there
 
 @quam_dataclass
 class ReadoutResonatorIQ(InOutIQChannel, ReadoutResonatorBase):

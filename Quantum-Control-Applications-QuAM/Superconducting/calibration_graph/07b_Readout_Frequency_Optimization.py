@@ -20,7 +20,7 @@ Next steps before going to the next node:
 # %% {Imports}
 from qualibrate import QualibrationNode, NodeParameters
 from quam_libs.components import QuAM
-from quam_libs.macros import qua_declaration, active_reset
+from quam_libs.macros import qua_declaration
 from quam_libs.lib.qua_datasets import apply_angle, subtract_slope, convert_IQ_to_V, gradient
 from quam_libs.lib.plot_utils import QubitGrid, grid_iter
 from quam_libs.lib.save_utils import fetch_results_as_xarray
@@ -44,11 +44,12 @@ class Parameters(NodeParameters):
     frequency_step_in_mhz: float = 0.5
     simulate: bool = False
     simulation_duration_ns: int = 2500
-    reset_type_thermal_or_active: Literal["thermal", "active"] = "thermal"
+    reset_type_thermal_or_active: Literal["thermal", "active"] = "active"
     timeout: int = 100
 
 
-node = QualibrationNode(name="07b_Readout_Frequency_Optimization", parameters=Parameters())
+node = QualibrationNode(name="07b_Readout_Frequency_Optimization", parameters=Parameters(
+))
 
 
 # %% {Initialize_QuAM_and_QOP}
@@ -96,25 +97,22 @@ with program() as ro_freq_opt:
         with for_(n, 0, n < n_avg, n + 1):
             save(n, n_st)
             with for_(*from_array(df, dfs)):
-                # Update the resonator frequencies
-                update_frequency(qubit.resonator.name, df + qubit.resonator.intermediate_frequency)
                 # Initialize the qubits
-                if reset_type == "active":
-                    active_reset(qubit, "readout", readout_pulse_name='readout')
-                else:
-                    wait(qubit.thermalization_time * u.ns)
-                align()
+                update_frequency(qubit.resonator.name, qubit.resonator.intermediate_frequency)
+                qubit.reset(reset_type)
                 # Measure the state of the resonators
+                update_frequency(qubit.resonator.name, df + qubit.resonator.intermediate_frequency)
                 qubit.resonator.measure("readout", qua_vars=(I_g[i], Q_g[i]))
 
                 align()
-                # Wait for thermalization again in case of measurement induced transitions
-                wait(qubit.thermalization_time * u.ns)
+                update_frequency(qubit.resonator.name, qubit.resonator.intermediate_frequency)
+                qubit.reset(reset_type)
                 # Play the x180 gate to put the qubits in the excited state
                 qubit.xy.play("x180")
                 # Align the elements to measure after playing the qubit pulses.
                 align()
                 # Measure the state of the resonators
+                update_frequency(qubit.resonator.name, df + qubit.resonator.intermediate_frequency)
                 qubit.resonator.measure("readout", qua_vars=(I_e[i], Q_e[i]))
 
                 # Derive the distance between the blobs for |g> and |e>
@@ -201,9 +199,9 @@ else:
 
     # %% {Data_analysis}
     # Get the readout detuning as the index of the maximum of the cumulative average of D
-    detuning = ds.D.rolling({"freq": 5}).mean("freq").idxmax("freq")
+    detuning = ds.D.rolling({"freq": 1}).mean("freq").idxmax("freq")
     # Get the dispersive shift as the distance between the resonator frequency when the qubit is in |g> and |e>
-    chi = (ds.IQ_abs_e.idxmin(dim="freq") - ds.IQ_abs_g.idxmin(dim="freq")) / 2
+    chi = (ds.group_delay_g.idxmin(dim="freq") - ds.group_delay_e.idxmin(dim="freq")) / 2
 
     # Save fitting results
     fit_results = {q.name: {"detuning": detuning.loc[q.name].values, "chi": chi.loc[q.name].values} for q in qubits}
@@ -211,7 +209,7 @@ else:
 
     for q in qubits:
         print(f"{q.name}: Shifting readout frequency by {fit_results[q.name]['detuning']/1e3:.0f} kHz")
-        print(f"{q.name}: Chi = {fit_results[q.name]['chi']:.2f} \n")
+        print(f"{q.name}: Chi = {fit_results[q.name]['chi'] * 1e-6:.2f} MHz\n")
 
     # %% {Plotting}
     grid = QubitGrid(ds, [q.grid_location for q in qubits])

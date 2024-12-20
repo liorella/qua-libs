@@ -110,12 +110,7 @@ with program() as stark_detuning:
             save(n, n_st)
             with for_(*from_array(npi, N_pi_vec)):
                 with for_(*from_array(df, dfs)):
-                    # Initialize the qubits
-                    if reset_type == "active":
-                        active_reset(qubit, "readout", readout_pulse_name='readout')
-                    else:
-                        qubit.wait(qubit.thermalization_time * u.ns)
-
+                    qubit.reset(reset_type)
                     # Update the qubit frequency after initialization for active reset
                     update_frequency(qubit.xy.name, df + qubit.xy.intermediate_frequency)
                     with for_(count, 0, count < npi, count + 1):

@@ -20,9 +20,10 @@ Prerequisites:
 """
 
 # %% {Imports}
+from utils import generate_and_fix_config, print_qubit_params
 from qualibrate import QualibrationNode, NodeParameters
 from quam_libs.components import QuAM, Transmon
-from quam_libs.macros import qua_declaration, active_reset
+from quam_libs.macros import qua_declaration
 from quam_libs.lib.plot_utils import QubitGrid, grid_iter
 from quam_libs.lib.save_utils import fetch_results_as_xarray
 from quam_libs.lib.fit import fit_decay_exp, decay_exp
@@ -47,7 +48,7 @@ class Parameters(NodeParameters):
     num_random_sequences: int = 100  # Number of random sequences
     num_averages: int = 20
     max_circuit_depth: int = 4000  # Maximum circuit depth
-    delta_clifford: int = 80
+    delta_clifford: int = 100
     seed: int = 345324
     reset_type_thermal_or_active: Literal["thermal", "active"] = "thermal"
     simulate: bool = False
@@ -55,13 +56,20 @@ class Parameters(NodeParameters):
     timeout: int = 100
 
 
-node = QualibrationNode(name="10a_Single_Qubit_Randomized_Benchmarking__Parallel",
-                        parameters=Parameters(qubits=['q0', 'q1', 'q2', 'q3', 'q4'],
-                        simulate=True,
-                        max_circuit_depth=10,
-                        delta_clifford=2,
-                        simulation_duration_ns=10000,
-                        num_averages=1))
+simulation_parameters = Parameters(
+    simulate=True,
+    max_circuit_depth=10,
+    delta_clifford=2,
+    simulation_duration_ns=10000,
+    num_averages=1
+)
+
+execution_parameters = Parameters(
+)
+
+node = QualibrationNode(name="10a_Single_Qubit_Randomized_Benchmarking_Parallel",
+                        parameters=execution_parameters
+                        )
 
 
 # %% {Initialize_QuAM_and_QOP}
@@ -82,7 +90,6 @@ num_qubits = len(qubits)
 
 # %% {QUA_program_parameters}
 
-from utils import generate_and_fix_config, print_qubit_params
 config = generate_and_fix_config(quam)
 
 num_of_sequences = node.parameters.num_random_sequences  # Number of random sequences
@@ -94,7 +101,8 @@ if node.parameters.delta_clifford < 1:
 #  Play each sequence with a depth step equals to 'delta_clifford - Must be > 1
 delta_clifford = node.parameters.delta_clifford
 reset_type = node.parameters.reset_type_thermal_or_active
-assert (max_circuit_depth / delta_clifford).is_integer(), "max_circuit_depth / delta_clifford must be an integer."
+assert (max_circuit_depth / delta_clifford).is_integer(
+), "max_circuit_depth / delta_clifford must be an integer."
 num_depths = max_circuit_depth // delta_clifford + 1
 seed = node.parameters.seed  # Pseudo-random number generator seed
 # Flag to enable state discrimination if the readout has been calibrated (rotated blobs and threshold)
@@ -233,15 +241,11 @@ with program() as randomized_benchmarking:
             # Only played the depth corresponding to target_depth
             with if_((depth == 1) | (depth == depth_target)):
                 with for_(n, 0, n < n_avg, n + 1):
-                    
-                    # align()
-                    # for i, qubit in enumerate(qubits):
-                    #     # Initialize the qubits
-                    #     if reset_type == "active":
-                    #         active_reset(qubit, "readout", readout_pulse_name='readout')
-                    #     else:
-                    #         qubit.resonator.wait(qubit.thermalization_time * u.ns)
-                    
+
+                    align()
+                    for i, qubit in enumerate(qubits):
+                        qubit.reset(reset_type)
+
                     align()
                     for i, qubit in enumerate(qubits):
                         if strict_timing:
@@ -251,15 +255,17 @@ with program() as randomized_benchmarking:
                         else:
                             play_sequence(sequence_list, depth, qubit)
                         # Align the two elements to measure after playing the circuit.
-                    
+
                     align()
                     for i, qubit in enumerate(qubits):
                         # Make sure you updated the ge_threshold and angle if you want to use state discrimination
-                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
+                        qubit.resonator.measure(
+                            "readout", qua_vars=(I[i], Q[i]))
                         # Make sure you updated the ge_threshold
                         assign(
                             state[i],
-                            Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold),
+                            Cast.to_int(
+                                I[i] > qubit.resonator.operations["readout"].threshold),
                         )
                         save(state[i], state_st[i])
 
@@ -280,12 +286,13 @@ with program() as randomized_benchmarking:
 
 # %% {Simulate_or_execute}
 if node.parameters.simulate:
-    simulation_config = SimulationConfig(duration=node.parameters.simulation_duration_ns//4)  # in clock cycles
+    simulation_config = SimulationConfig(
+        duration=node.parameters.simulation_duration_ns//4)  # in clock cycles
     job = qmm.simulate(config, randomized_benchmarking, simulation_config)
     samples = job.get_simulated_samples()
     fig, ax = plt.subplots(nrows=len(samples.keys()), sharex=True)
     for i, con in enumerate(samples.keys()):
-        plt.subplot(len(samples.keys()),1,i+1)
+        plt.subplot(len(samples.keys()), 1, i+1)
         samples[con].plot()
         plt.title(con)
     plt.tight_layout()
@@ -305,7 +312,8 @@ else:
             while results.is_processing():
                 # Fetch results
                 m = results.fetch_all()[0]
-                progress_counter(m, num_of_sequences, start_time=results.start_time)
+                progress_counter(m, num_of_sequences,
+                                 start_time=results.start_time)
 
     # %% {Data_fetching_and_dataset_creation}
     depths = np.arange(0, max_circuit_depth + 0.1, delta_clifford)
@@ -331,7 +339,8 @@ else:
     # Extract the decay rate
     alpha = np.exp(da_fit.sel(fit_vals="decay"))
     # average_gate_per_clifford = 45/24 = 1.875
-    average_gate_per_clifford = (1 * 3 + 9 * 2 + 1 * 4 + 2 * 3 + 4 * 2 + 2 * 3) / 24
+    average_gate_per_clifford = (
+        1 * 3 + 9 * 2 + 1 * 4 + 2 * 3 + 4 * 2 + 2 * 3) / 24
     # EPC from here: https://qiskit.org/textbook/ch-quantum-hardware/randomized-benchmarking.html#Step-5:-Fit-the-results
     EPC = (1 - alpha) - (1 - alpha) / 2
     EPG = EPC / average_gate_per_clifford
@@ -340,8 +349,10 @@ else:
     node.results["fit_results"] = {}
     for q in qubits:
         node.results["fit_results"][q.name] = {}
-        node.results["fit_results"][q.name]["EPC"] = EPC.sel(qubit=q.name).values
-        node.results["fit_results"][q.name]["EPG"] = EPG.sel(qubit=q.name).values
+        node.results["fit_results"][q.name]["EPC"] = EPC.sel(
+            qubit=q.name).values
+        node.results["fit_results"][q.name]["EPG"] = EPG.sel(
+            qubit=q.name).values
         print(f"{q.name}: EPC={EPC.sel(qubit=q.name).values}")
         print(f"{q.name}: EPG={EPG.sel(qubit=q.name).values}")
 
@@ -352,7 +363,8 @@ if not node.parameters.simulate:
     grid = QubitGrid(ds, [q.grid_location for q in qubits])
     for ax, qubit in grid_iter(grid):
         da_state_qubit = da_state.sel(qubit=qubit["qubit"])
-        da_state_std = ds["state"].std(dim="sequence").sel(qubit=qubit["qubit"])
+        da_state_std = ds["state"].std(
+            dim="sequence").sel(qubit=qubit["qubit"])
         ax.plot(
             da_state_qubit.m,
             da_state_qubit,
@@ -365,7 +377,8 @@ if not node.parameters.simulate:
         m = da_state.m.values
         ax.set_title(qubit["qubit"], pad=22)
         ax.set_xlabel("Circuit depth")
-        fit_dict = {k: da_fit.sel(**qubit).sel(fit_vals=k).values for k in da_fit.fit_vals.values}
+        fit_dict = {k: da_fit.sel(
+            **qubit).sel(fit_vals=k).values for k in da_fit.fit_vals.values}
         ax.plot(m, decay_exp(m, **fit_dict), "r--", label="fit")
         ax.text(
             0.0,
@@ -388,4 +401,3 @@ if not node.parameters.simulate:
 
 # %%
 
-job.plot_waveform_report_with_simulated_samples()

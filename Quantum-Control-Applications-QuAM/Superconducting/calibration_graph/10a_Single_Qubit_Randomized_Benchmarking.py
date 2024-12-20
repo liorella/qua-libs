@@ -22,7 +22,7 @@ Prerequisites:
 # %% {Imports}
 from qualibrate import QualibrationNode, NodeParameters
 from quam_libs.components import QuAM, Transmon
-from quam_libs.macros import qua_declaration, active_reset
+from quam_libs.macros import qua_declaration
 from quam_libs.lib.plot_utils import QubitGrid, grid_iter
 from quam_libs.lib.save_utils import fetch_results_as_xarray
 from quam_libs.lib.fit import fit_decay_exp, decay_exp
@@ -47,15 +47,16 @@ class Parameters(NodeParameters):
     num_random_sequences: int = 100  # Number of random sequences
     num_averages: int = 20
     max_circuit_depth: int = 4000  # Maximum circuit depth
-    delta_clifford: int = 80
+    delta_clifford: int = 100
     seed: int = 345324
-    reset_type_thermal_or_active: Literal["thermal", "active"] = "thermal"
+    reset_type_thermal_or_active: Literal["thermal", "active"] = "active"
     simulate: bool = False
     simulation_duration_ns: int = 2500
     timeout: int = 100
 
 
-node = QualibrationNode(name="10a_Single_Qubit_Randomized_Benchmarking", parameters=Parameters(qubits=['q0', 'q1', 'q2', 'q3', 'q4']))
+node = QualibrationNode(name="10a_Single_Qubit_Randomized_Benchmarking", parameters=Parameters(
+))
 
 
 # %% {Initialize_QuAM_and_QOP}
@@ -229,13 +230,7 @@ with program() as randomized_benchmarking:
                 with for_(n, 0, n < n_avg, n + 1):
                     for i, qubit in enumerate(qubits):
                         align()
-                        # Initialize the qubits
-                        if reset_type == "active":
-                            active_reset(qubit, "readout", readout_pulse_name='readout')
-                        else:
-                            qubit.resonator.wait(qubit.thermalization_time * u.ns)
-                        # Align the two elements to play the sequence after qubit initialization
-                        align(qubit.xy.name, qubit.resonator.name)
+                        qubit.reset(reset_type)
                         # The strict_timing ensures that the sequence will be played without gaps
                         if strict_timing:
                             with strict_timing_():

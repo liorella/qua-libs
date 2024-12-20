@@ -5,8 +5,8 @@ from .flux_line import FluxLine
 from .readout_resonator import ReadoutResonator
 from qualang_tools.octave_tools import octave_calibration_tool
 from qm import QuantumMachine, logger
-from typing import Dict, Any, Optional, Union, List, Tuple
-from qm.qua import align, wait
+from typing import Dict, Any, Literal, Optional, Union, List, Tuple
+from qm.qua import align, wait, declare, fixed, assign, while_, save, StreamType
 import numpy as np
 from dataclasses import field
 
@@ -64,6 +64,8 @@ class Transmon(QuamComponent):
     grid_location: str = None
     extras: Dict[str, Any] = field(default_factory=dict)
 
+    active_reset_available: bool = False
+
     def get_output_power(self, operation, Z=50) -> float:
         power = self.xy.opx_output.full_scale_power_dbm
         amplitude = self.xy.operations[operation].amplitude
@@ -76,9 +78,11 @@ class Transmon(QuamComponent):
         """The 0-2 (e-f) transition frequency in Hz, derived from f_01 and anharmonicity"""
         name = getattr(self, "name", self.__class__.__name__)
         if not isinstance(self.f_01, (float, int)):
-            raise AttributeError(f"Error inferring f_12 for channel {name}: {self.f_01=} is not a number")
+            raise AttributeError(
+                f"Error inferring f_12 for channel {name}: {self.f_01=} is not a number")
         if not isinstance(self.anharmonicity, (float, int)):
-            raise AttributeError(f"Error inferring f_12 for channel {name}: {self.anharmonicity=} is not a number")
+            raise AttributeError(
+                f"Error inferring f_12 for channel {name}: {self.anharmonicity=} is not a number")
         return self.f_01 + self.anharmonicity
 
     @property
@@ -86,9 +90,11 @@ class Transmon(QuamComponent):
         """The transmon anharmonicity in Hz, derived from f_01 and f_12."""
         name = getattr(self, "name", self.__class__.__name__)
         if not isinstance(self.f_01, (float, int)):
-            raise AttributeError(f"Error inferring anharmonicity for channel {name}: {self.f_01=} is not a number")
+            raise AttributeError(
+                f"Error inferring anharmonicity for channel {name}: {self.f_01=} is not a number")
         if not isinstance(self.f_12, (float, int)):
-            raise AttributeError(f"Error inferring anharmonicity for channel {name}: {self.f_12=} is not a number")
+            raise AttributeError(
+                f"Error inferring anharmonicity for channel {name}: {self.f_12=} is not a number")
         return self.f_12 - self.f_01
 
     @property
@@ -146,16 +152,65 @@ class Transmon(QuamComponent):
             )
 
         if self is other:
-            raise ValueError("Cannot create a qubit pair with same qubit (q1 @ q1), where q1={self}")
+            raise ValueError(
+                "Cannot create a qubit pair with same qubit (q1 @ q1), where q1={self}")
 
         for qubit_pair in self._root.qubit_pairs:
             if qubit_pair.qubit_control is self and qubit_pair.qubit_target is other:
                 return qubit_pair
         else:
-            raise ValueError("Qubit pair not found: qubit_control={self.name}, " "qubit_target={other.name}")
+            raise ValueError(
+                "Qubit pair not found: qubit_control={self.name}, " "qubit_target={other.name}")
 
     def align(self):
         align(self.xy.name, self.resonator.name)
 
     def wait(self, duration):
         wait(duration, self.xy.name, self.resonator.name)
+
+    def reset(self, override_default: Optional[Literal['thermal', 'active']] = None):
+        reset_type = self.default_reset if override_default is None else override_default
+        if not self.active_reset_available:
+            reset_type = 'thermal'
+        if reset_type == "active":
+            self.active_reset("readout", readout_pulse_name='readout')
+        elif reset_type == "thermal":
+            self.wait(self.thermalization_time // 4)
+        else:
+            raise ValueError(f"Unrecognized reset type {reset_type}.")
+        self.align()
+
+    
+    def active_reset(
+        self,
+        save_qua_var: Optional[StreamType] = None,
+        pi_pulse_name: str = "x180",
+        readout_pulse_name: str = "readout_QND",
+        max_attempts: int = 15,
+    ):
+        pulse = self.resonator.operations[readout_pulse_name]
+
+        I = declare(fixed)
+        Q = declare(fixed)
+        state = declare(bool)
+        attempts = declare(int, value=1)
+        pi_threshold = pulse.threshold#self.resonator.rus_pi_threshold if self.resonator.rus_pi_threshold is not None else pulse.threshold
+        assign(attempts, 1)
+        self.align()
+        self.resonator.measure(readout_pulse_name, qua_vars=(I, Q))
+        assign(state, I > pi_threshold)
+        wait(self.resonator.depletion_time // 2, self.resonator.name)
+        self.xy.play(pi_pulse_name, condition=state)
+        self.align()
+        with while_((I > pulse.rus_exit_threshold) & (attempts < max_attempts)):
+            self.align()
+            self.resonator.measure(readout_pulse_name, qua_vars=(I, Q))
+            assign(state, I > pi_threshold)
+            wait(self.resonator.depletion_time // 2, self.resonator.name)
+            self.xy.play(pi_pulse_name, condition=state)
+            self.align()
+            assign(attempts, attempts + 1)
+        wait(500, self.xy.name)
+        self.align()
+        if save_qua_var is not None:
+            save(attempts, save_qua_var)

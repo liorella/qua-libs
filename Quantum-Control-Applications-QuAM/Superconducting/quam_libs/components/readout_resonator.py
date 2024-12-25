@@ -22,7 +22,7 @@ class ReadoutResonatorBase:
 
     gef_centers: list = None
     gef_confusion_matrix: list = None
-    rus_pi_threshold = None # this should be in the pulse but I don't know how to put it there
+    rus_pi_threshold: float = None # this should be in the pulse but I don't know how to put it there
 
 @quam_dataclass
 class ReadoutResonatorIQ(InOutIQChannel, ReadoutResonatorBase):
@@ -50,4 +50,4 @@ class ReadoutResonatorMW(InOutMWChannel, ReadoutResonatorBase):
         return 10 * np.log10(((x_v / np.sqrt(2)) ** 2 * 1000) / Z)
 
 
-ReadoutResonator = ReadoutResonatorIQ
+ReadoutResonator = ReadoutResonatorMW

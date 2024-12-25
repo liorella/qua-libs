@@ -168,16 +168,15 @@ class Transmon(QuamComponent):
     def wait(self, duration):
         wait(duration, self.xy.name, self.resonator.name)
 
-    def reset(self, override_default: Optional[Literal['thermal', 'active']] = None):
-        reset_type = self.default_reset if override_default is None else override_default
-        if not self.active_reset_available:
-            reset_type = 'thermal'
-        if reset_type == "active":
+    def reset(self, requested_reset_type: Literal['thermal', 'active'] = 'active'):
+        if requested_reset_type not in ['thermal', 'active']:
+            raise ValueError(f"Invalid reset type: {requested_reset_type}")
+
+        if self.active_reset_available and requested_reset_type == 'active':
             self.active_reset("readout", readout_pulse_name='readout')
-        elif reset_type == "thermal":
-            self.wait(self.thermalization_time // 4)
         else:
-            raise ValueError(f"Unrecognized reset type {reset_type}.")
+            self.wait(self.thermalization_time // 4)
+
         self.align()
 
     

@@ -22,7 +22,16 @@ from qualang_tools.results.data_handler import DataHandler
 
 from dataclasses import field
 from typing import List, Dict, ClassVar, Any, Optional, Sequence, Union
-
+from qm.qua._dsl import (
+    _PulseAmp,
+    AmpValuesType,
+    QuaNumberType,
+    QuaVariableType,
+    QuaExpressionType,
+    ChirpType,
+    StreamType,
+)
+from qm.qua import assign, declare, fixed
 __all__ = ["QuAM", "FEMQuAM", "OPXPlusQuAM"]
 
 
@@ -72,7 +81,8 @@ class QuAM(QuamRoot):
     def data_handler(self) -> DataHandler:
         """Return the existing data handler or open a new one to conveniently handle data saving."""
         if self._data_handler is None:
-            self._data_handler = DataHandler(root_data_folder=self.network["data_folder"])
+            self._data_handler = DataHandler(
+                root_data_folder=self.network["data_folder"])
             DataHandler.node_data = {"quam": "./state.json"}
         return self._data_handler
 
@@ -112,14 +122,16 @@ class QuAM(QuamRoot):
                 q.z.to_joint_idle()
                 q.z.settle()
             else:
-                warnings.warn(f"Didn't find z-element on qubit {q.name}, didn't set to joint-idle")
+                warnings.warn(
+                    f"Didn't find z-element on qubit {q.name}, didn't set to joint-idle")
         for q in self.qubits:
             if self.qubits[q] not in self.active_qubits:
                 if self.qubits[q].z is not None:
                     self.qubits[q].z.to_min()
                     self.qubits[q].z.settle()
                 else:
-                    warnings.warn(f"Didn't find z-element on qubit {q}, didn't set to min")
+                    warnings.warn(
+                        f"Didn't find z-element on qubit {q}, didn't set to min")
         align()
 
     def apply_all_flux_to_min(self) -> None:
@@ -130,7 +142,8 @@ class QuAM(QuamRoot):
                 self.qubits[q].z.to_min()
                 self.qubits[q].z.settle()
             else:
-                warnings.warn(f"Didn't find z-element on qubit {q}, didn't set to min")
+                warnings.warn(
+                    f"Didn't find z-element on qubit {q}, didn't set to min")
         self.apply_all_couplers_to_min()
         align()
 
@@ -164,7 +177,8 @@ class QuAM(QuamRoot):
             if octave_config is None:
                 octave_config = octave.get_octave_config()
             else:
-                octave_config.add_device_info(octave.name, octave.ip, octave.port)
+                octave_config.add_device_info(
+                    octave.name, octave.ip, octave.port)
 
         return octave_config
 
@@ -180,7 +194,28 @@ class QuAM(QuamRoot):
             try:
                 self.qubits[name].calibrate_octave(QM)
             except NoCalibrationElements:
-                print(f"No calibration elements found for {name}. Skipping calibration.")
+                print(f"No calibration elements found for {
+                      name}. Skipping calibration.")
+
+    def measure(self,
+                qubits: Transmon | Sequence[Transmon],
+                state: Optional[QuaVariableType] = None,
+                iq: Optional[tuple[QuaVariableType, QuaVariableType]] = None):
+        if not isinstance(qubits, Transmon):
+            raise NotImplementedError(
+                'only measuring one qubit is supported for now')
+        qubit = qubits
+        if state is not None and iq is not None:
+            raise ValueError('only one of state and iq can be not None')
+
+        if iq is not None:
+            qubit.resonator.measure("readout", qua_vars=iq)
+
+        if state is not None:
+            I = declare(fixed)
+            Q = declare(fixed)
+            qubit.resonator.measure("readout", qua_vars=(I, Q))
+            assign(state, I > qubit.resonator.operations["readout"].threshold)
 
 
 @quam_dataclass

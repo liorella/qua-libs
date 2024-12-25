@@ -17,7 +17,7 @@ def extract_string(input_string):
         return None
 
 
-def fetch_results_as_xarray(handles, qubits, measurement_axis):
+def fetch_results_as_xarray(handles, qubits, measurement_axis, dims_tuple = None):
     """
     Fetches measurement results as an xarray dataset.
     Parameters:
@@ -36,8 +36,12 @@ def fetch_results_as_xarray(handles, qubits, measurement_axis):
     measurement_axis["qubit"] = [qubit.name for qubit in qubits]
     measurement_axis = {key: measurement_axis[key] for key in reversed(measurement_axis.keys())}
 
+    if dims_tuple is not None:
+        dims_tuple = ('qubit',) + dims_tuple
+    else:
+        dims_tuple = [key for key in measurement_axis.keys()]
     ds = xr.Dataset(
-        {f"{meas_var}": ([key for key in measurement_axis.keys()], values[i]) for i, meas_var in enumerate(meas_vars)},
+        {f"{meas_var}": (dims_tuple, values[i]) for i, meas_var in enumerate(meas_vars)},
         coords=measurement_axis,
     )
 

@@ -47,7 +47,7 @@ class Parameters(NodeParameters):
     num_random_sequences: int = 100  # Number of random sequences
     num_averages: int = 20
     max_circuit_depth: int = 4000  # Maximum circuit depth
-    delta_clifford: int = 100
+    delta_clifford: int = 500
     seed: int = 345324
     reset_type_thermal_or_active: Literal["thermal", "active"] = "active"
     simulate: bool = False

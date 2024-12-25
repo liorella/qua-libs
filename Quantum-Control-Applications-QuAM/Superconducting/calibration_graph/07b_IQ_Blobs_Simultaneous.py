@@ -24,7 +24,7 @@ Next steps before going to the next node:
 # %% {Imports}
 from qualibrate import QualibrationNode, NodeParameters
 from quam_libs.components import QuAM
-from quam_libs.macros import qua_declaration, active_reset
+from quam_libs.macros import qua_declaration
 from quam_libs.lib.qua_datasets import convert_IQ_to_V
 from quam_libs.lib.plot_utils import QubitGrid, grid_iter
 from quam_libs.lib.save_utils import fetch_results_as_xarray
@@ -52,7 +52,10 @@ class Parameters(NodeParameters):
     timeout: int = 100
 
 
-node = QualibrationNode(name="07b_IQ_Blobs_simultaneous", parameters=Parameters())
+node = QualibrationNode(name="07b_IQ_Blobs_simultaneous", parameters=Parameters(
+    qubits=['q0', 'q1']
+
+))
 
 
 # %% {Initialize_QuAM_and_QOP}
@@ -73,8 +76,6 @@ num_qubits = len(qubits)
 
 # %% {QUA_program}
 # Generate the OPX and Octave configurations
-from utils import generate_and_fix_config, print_qubit_params
-config = generate_and_fix_config(quam)
 
 n_runs = node.parameters.num_runs  # Number of runs
 reset_type = node.parameters.reset_type_thermal_or_active  # "active" or "thermal"
@@ -85,17 +86,11 @@ with program() as iq_blobs:
     I_e, I_e_st, Q_e, Q_e_st, _, _ = qua_declaration(num_qubits=num_qubits)
 
     with for_(n, 0, n < n_runs, n + 1):
+        save(n, n_st)
         align()
         for i, qubit in enumerate(qubits):
-            # ground iq blobs for all qubits
-            save(n, n_st)
-            if reset_type == "active":
-                active_reset(qubit, "readout", readout_pulse_name='readout')
-            elif reset_type == "thermal":
-                qubit.wait(qubit.thermalization_time * u.ns)
-            else:
-                raise ValueError(f"Unrecognized reset type {reset_type}.")
-
+            qubit.reset(reset_type)
+        
         align()
         for i, qubit in enumerate(qubits):
             qubit.resonator.measure(operation_name, qua_vars=(I_g[i], Q_g[i]))
@@ -106,13 +101,7 @@ with program() as iq_blobs:
 
         align()
         for i, qubit in enumerate(qubits):
-            # excited iq blobs for all qubits
-            if reset_type == "active":
-                active_reset(qubit, "readout", readout_pulse_name='readout')
-            elif reset_type == "thermal":
-                qubit.wait(qubit.thermalization_time * u.ns)
-            else:
-                raise ValueError(f"Unrecognized reset type {reset_type}.")
+            qubit.reset(reset_type)
         align()
         for i, qubit in enumerate(qubits):
             qubit.xy.play("x180")
@@ -134,6 +123,8 @@ with program() as iq_blobs:
 
 
 # %% {Simulate_or_execute}
+from utils import generate_and_fix_config, print_qubit_params
+config = generate_and_fix_config(quam)
 if node.parameters.simulate:
     # Simulates the QUA program for the specified duration
     simulation_config = SimulationConfig(duration=node.parameters.simulation_duration_ns * 4)  # In clock cycles = 4ns
@@ -316,10 +307,10 @@ else:
                 qubit.resonator.confusion_matrix = node.results["results"][qubit.name]["confusion_matrix"].tolist()
 
     # %% {Save_results}
-    node.outcomes = {q.name: "successful" for q in qubits}
-    node.results["initial_parameters"] = node.parameters.model_dump()
-    node.machine = quam
-    node.save()
-    quam.save()
+    # node.outcomes = {q.name: "successful" for q in qubits}
+    # node.results["initial_parameters"] = node.parameters.model_dump()
+    # node.machine = quam
+    # node.save()
+    # quam.save()
 
 # %%

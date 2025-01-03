@@ -56,7 +56,11 @@ class Parameters(NodeParameters):
 node = QualibrationNode(name="07a_IQ_Blobs", parameters=Parameters(
     num_runs=10000,
     reset_type_thermal_or_active='active',
-    # qubits=['q3', 'q4']
+    # qubits=[
+    #     'q0', 'q1', 'q2',
+    #         #  'q3',
+    #            'q4'
+    #            ]
 ))
 
 
@@ -75,13 +79,12 @@ else:
     qubits = [quam.qubits[q] for q in node.parameters.qubits]
 num_qubits = len(qubits)
 
-# quam.qubits.q0.resonator.operations.readout.amplitude = 0.055
-# quam.qubits.q0.resonator.operations.readout.length = 2000
-# quam.qubits.q1.resonator.operations.readout.amplitude = 0.08
-# quam.qubits.q3.resonator.operations.readout.amplitude = 0.04
-# quam.qubits.q3.resonator.operations.readout.length = 1000
-# quam.qubits.q4.resonator.operations.readout.amplitude = 0.04
-# quam.qubits.q4.resonator.operations.readout.length = 1600
+# for q in quam.qubits.values():
+#     q.resonator.operations['readout'].amplitude = 0.075
+#     q.resonator.operations['readout'].length = 1000
+#     q.active_reset_available = True
+# quam.qubits['q3'].resonator.intermediate_frequency = quam.qubits['q3'].resonator.intermediate_frequency + 2.5e6
+# quam.qubits['q3'].active_reset_available = False
 # %% {QUA_program}
 n_runs = node.parameters.num_runs  # Number of runs
 reset_type = node.parameters.reset_type_thermal_or_active  # "active" or "thermal"

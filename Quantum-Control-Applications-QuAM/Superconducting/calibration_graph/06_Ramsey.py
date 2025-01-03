@@ -21,7 +21,7 @@ Next steps before going to the next node:
 # %% {Imports}
 from qualibrate import QualibrationNode, NodeParameters
 from quam_libs.components import QuAM
-from quam_libs.macros import qua_declaration, readout_state, active_reset
+from quam_libs.macros import qua_declaration, readout_state
 from quam_libs.lib.qua_datasets import convert_IQ_to_V
 from quam_libs.lib.plot_utils import QubitGrid, grid_iter
 from quam_libs.lib.save_utils import fetch_results_as_xarray
@@ -47,7 +47,7 @@ class Parameters(NodeParameters):
     max_wait_time_in_ns: int = 20000
     num_time_points: int = 200
     log_or_linear_sweep: Literal["log", "linear"] = "linear"
-    reset_type_thermal_or_active: Literal["thermal", "active"] = "thermal"
+    reset_type: Literal["thermal", "active"] = "thermal"
     use_state_discrimination: bool = False
     simulate: bool = False
     simulation_duration_ns: int = 2500
@@ -79,7 +79,7 @@ num_qubits = len(qubits)
 from utils import generate_and_fix_config, print_qubit_params
 config = generate_and_fix_config(quam)
 n_avg = node.parameters.num_averages  # The number of averages
-reset_type = node.parameters.reset_type_thermal_or_active  # "active" or "thermal"
+reset_type = node.parameters.reset_type  # "active" or "thermal"
 # Dephasing time sweep (in clock cycles = 4ns) - minimum is 4 clock cycles
 if node.parameters.log_or_linear_sweep == "linear":
     idle_times = (
@@ -126,13 +126,7 @@ with program() as ramsey:
                     with else_():
                         assign(phi, Cast.mul_fixed_by_int(-detuning * 1e-9, 4 * t))
                     align()
-                    # # Strict_timing ensures that the sequence will be played without gaps
-                    # with strict_timing_():
-                    # Initialize the qubits
-                    if reset_type == "active":
-                        active_reset(qubit, "readout", readout_pulse_name='readout')
-                    else:
-                        qubit.wait(qubit.thermalization_time * u.ns)
+                    qubit.reset(node.parameters.reset_type)
                     qubit.xy.play("x90")
                     qubit.xy.wait(t)
                     qubit.xy.frame_rotation_2pi(phi)

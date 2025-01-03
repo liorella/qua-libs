@@ -194,8 +194,7 @@ class QuAM(QuamRoot):
             try:
                 self.qubits[name].calibrate_octave(QM)
             except NoCalibrationElements:
-                print(f"No calibration elements found for {
-                      name}. Skipping calibration.")
+                print(f"No calibration elements found for {name}. Skipping calibration.")
 
     def measure(self,
                 qubits: Transmon | Sequence[Transmon],

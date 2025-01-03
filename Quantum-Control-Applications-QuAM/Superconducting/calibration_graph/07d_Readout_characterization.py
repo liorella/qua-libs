@@ -1,32 +1,23 @@
 """
-        QUBIT SPECTROSCOPY
-This sequence involves sending a saturation pulse to the qubit, placing it in a mixed state,
-and then measuring the state of the resonator across various qubit drive intermediate frequencies dfs.
-In order to facilitate the qubit search, the qubit pulse duration and amplitude can be changed manually in the QUA
-program directly from the node parameters.
+        ACSTARKCHI
+This experiment recreates the experiment done in https://arxiv.org/pdf/2402.00413.
 
-The data is post-processed to determine the qubit resonance frequency and the width of the peak.
+Things to note:
+1. `operation_amplitde_factor` is 0.8 in the paper and we're keeping it this way here
+2. the pi pulse duration seems to matter a lot and it needs to be smaller than 1/kappa for the
+experiment to make sense. This is contained in the factor `operation_len_factor`.
 
-Note that it can happen that the qubit is excited by the image sideband or LO leakage instead of the desired sideband.
-This is why calibrating the qubit mixer is highly recommended.
-
-Prerequisites:
-    - Identification of the resonator's resonance frequency when coupled to the qubit in question (referred to as "resonator_spectroscopy").
-    - Calibration of the IQ mixer connected to the qubit drive line (whether it's an external mixer or an Octave port).
-    - Set the flux bias to the desired working point, independent, joint or arbitrary, in the state.
-    - Configuration of the saturation pulse amplitude and duration to transition the qubit into a mixed state.
-
-Before proceeding to the next node:
-    - Update the qubit frequency in the state, as well as the expected x180 amplitude and IQ rotation angle.
-    - Save the current state
 """
 
 # %% {Imports}
+import pyle.samples.readout_helpers as readout_helpers
+import pandas as pd
 import pyle.dataking.datataker_v2.datataker_base as datataker_base
 import pyle.datavault.public as pdv
 import pyle.datavault.client as dv_client
 import getpass
 from pyle.dataking.datataker_v2.ac_stark_spectroscopy import CombinedACStarkChiAnalysis
+from tunits import GHz
 from utils import generate_and_fix_config
 import numpy as np
 import matplotlib.pyplot as plt
@@ -46,7 +37,7 @@ from quam_libs.components import QuAM
 from qualibrate import QualibrationNode, NodeParameters
 import pyle.samples.keys as keys
 from labrad.units import Hz, dBm, MHz
-%cd / usr/local/google/home/ellior/qua-libs/Quantum-Control-Applications-QuAM/Superconducting
+# %cd / usr/local/google/home/ellior/qua-libs/Quantum-Control-Applications-QuAM/Superconducting
 
 
 # %% {Node_parameters}
@@ -54,10 +45,10 @@ class Parameters(NodeParameters):
 
     qubits: Optional[List[str]] = None
     num_averages: int = 100
-    qubit_operation: str = "saturation"
-    operation_amplitude_factor: Optional[float] = 0.2
-    operation_len_in_ns: Optional[int] = None
-    q_frequency_span_in_mhz: float = 100
+    qubit_operation: str = "x180"
+    operation_amplitude_factor: float = 0.8
+    operation_len_factor: float = 1.25
+    q_frequency_span_in_mhz: float = 50
     q_frequency_step_in_mhz: float = 0.5
     r_frequency_span_in_mhz: float = 30
     r_frequency_step_in_mhz: float = 0.5
@@ -69,7 +60,10 @@ class Parameters(NodeParameters):
 
 node = QualibrationNode(name="07d_Readout_characterization",
                         parameters=Parameters(
-                            qubits=['q0', 'q1', 'q2', 'q4']
+                            qubits=[
+                                'q0', 'q1', 'q2', 'q4',
+                                # 'q3'
+                            ]
                         ))
 
 
@@ -96,19 +90,10 @@ dvw = dv_client.default_datavault().cd(
     ["", "Users", getpass.getuser(), "onboarding", "test_datavault"]
 )
 # %% {QUA_program}
-for q in quam.qubits.values():
-    q.xy.operations.saturation.amplitude = 0.25
 config = generate_and_fix_config(quam, use_threads=False)
 
 operation = node.parameters.qubit_operation  # The qubit operation to play
 n_avg = node.parameters.num_averages  # The number of averages
-# Adjust the pulse duration and amplitude to drive the qubit into a mixed state - can be None
-operation_len = node.parameters.operation_len_in_ns
-if node.parameters.operation_amplitude_factor:
-    # pre-factor to the value defined in the config - restricted to [-2; 2)
-    operation_amp = node.parameters.operation_amplitude_factor
-else:
-    operation_amp = 1.0
 # Qubit detuning sweep with respect to their resonance frequencies
 q_span = node.parameters.q_frequency_span_in_mhz * u.MHz
 q_step = node.parameters.q_frequency_step_in_mhz * u.MHz
@@ -117,6 +102,18 @@ r_span = node.parameters.r_frequency_span_in_mhz * u.MHz
 r_step = node.parameters.r_frequency_step_in_mhz * u.MHz
 r_dfs = np.arange(-r_span // 2, +r_span // 2, r_step, dtype=np.int32)
 qubit_freqs = {q.name: q.f_01 for q in qubits}  # for opx
+operation_duration_clk = {q.name:
+                          int(node.parameters.operation_len_factor *
+                              (q.xy.operations[operation].length // 4))
+                          for q in qubits}
+
+rabi_rate_duration_factor = {q.name: (q.xy.operations[operation].length // 4) /
+                             operation_duration_clk[q.name]
+                             for q in qubits}
+print('rabi_rate_duration_factor = ')
+print(rabi_rate_duration_factor)
+print('operation_duration_clk = ')
+print(operation_duration_clk)
 
 target_peak_width = node.parameters.target_peak_width
 if target_peak_width is None:
@@ -134,7 +131,7 @@ with program() as readout_characterization:
         state_stream = [declare_stream() for _ in range(num_qubits)]
     else:
         I, I_st, Q, Q_st, n, n_st = qua_declaration(num_qubits=num_qubits)
-    
+
     q_df = declare(int)  # QUA variable for the qubit frequency
     r_df = declare(int)  # QUA variable for the qubit frequency
     prep_state = declare(fixed)
@@ -149,7 +146,7 @@ with program() as readout_characterization:
             with for_each_(prep_state, [0.0, 1.0]):
                 with for_(*from_array(r_df, r_dfs)):
                     with for_(*from_array(q_df, q_dfs)):
-                        qubit.reset()
+                        qubit.reset()                         # TEMP REMOVE
                         qubit.xy.play('x180', amplitude_scale=prep_state)
 
                         qubit.align()
@@ -158,13 +155,15 @@ with program() as readout_characterization:
                         qubit.resonator.update_frequency(r_df + res_if)
                         qubit.xy.update_frequency(q_df + q_if)
                         qubit.align()
-                        play('readout' * amp(1), qubit.resonator.name,
-                             duration=145 + 60*8//4)
+                        play('readout' * amp(0.5), qubit.resonator.name,
+                             duration=145 + operation_duration_clk[qubit.name])
 
                         qubit.xy.wait(125)
                         play(
-                            'x90' * amp(1/2), qubit.xy.name,
-                            duration=60*2 // 4,
+                            operation * amp(rabi_rate_duration_factor[qubit.name]
+                                            * node.parameters.operation_amplitude_factor),
+                            qubit.xy.name,
+                            duration=operation_duration_clk[qubit.name],
                         )
                         qubit.xy.update_frequency(q_if)
                         qubit.resonator.update_frequency(res_if)
@@ -179,7 +178,7 @@ with program() as readout_characterization:
                             save(state[i], state_stream[i])
                         else:
                             qubit.resonator.measure(
-                            "readout", qua_vars=(I[i], Q[i]))
+                                "readout", qua_vars=(I[i], Q[i]))
 
                             save(I[i], I_st[i])
                             save(Q[i], Q_st[i])
@@ -218,6 +217,7 @@ if node.parameters.simulate:
     node.results = {"figure": plt.gcf()}
     node.machine = quam
     node.save()
+    job.plot_waveform_report_with_simulated_samples()
 
 else:
     with qm_session(qmm, config, timeout=node.parameters.timeout) as qm:
@@ -259,16 +259,21 @@ else:
     node.results = {"ds": ds}
     # ds.state.loc[dict(prep_state=1)] = 1 - ds.state.loc[dict(prep_state=1)]
     # %% {Data_analysis}
+    # for fig, ax in plt.subplots(2, len(qubits)):
+    # for i, q in enumerate(qubits):
+    # ds.state.plot(x='r_freq_full', y='q_freq')
+
     ds.state.plot(col='qubit', row='prep_state', x='r_freq',
-              y='q_freq', add_colorbar=False)
+                  y='q_freq', add_colorbar=False)
 
     plt.gcf().tight_layout()
-
+    node.results['fig'] = plt.gcf()
+    node.save()
 
 # %%
 
 ds['one'] = ds.state
-ds['zero'] = 1- ds.state
+ds['zero'] = 1 - ds.state
 
 data = {q: {s: ds[['zero', 'one']].
         rename({'r_freq_full': 'readoutFrequency'}).
@@ -279,53 +284,137 @@ data = {q: {s: ds[['zero', 'one']].
         for q in ds.qubit.values}
 
 
-
-ro_attenuation = -20
-ro_power = quam.qubits['q0'].resonator.get_output_power('readout') + ro_attenuation
-ro_power = ro_power * dBm
 # ro_power = quam.qubits['q0'].resonator.opx_output.full_scale_power_dbm + \
 #       u.volts2dBm( quam.qubits['q0'].resonator.operations['readout'].amplitude) + \
 #       ro_attenuation
 
+df_summary = pd.DataFrame(columns=['q',
+                                   'chi [MHz]',
+                                   'kappa [MHz]',
+                                   '2chi/kappa',
+                                   'on res photon number',
+                                   'shift at res [MHz]',
+                                   'photon no. on drive',
+                                   'effective attenuation [dB]'])
 
+# I inferred this value so that I will get the correct amplitude when using readout_helpers.power2amp
+ro_attenuation = - 16.95
+datasets = {}
 results = {}
 analyses = {}
-ro_attenuation = -20
 for q in ds.qubit.values:
-    ro_power = quam.qubits[q].resonator.get_output_power('readout') + ro_attenuation
+    fsp = quam.qubits[q].resonator.opx_output.full_scale_power_dbm
+    ro_power = quam.qubits[q].resonator.get_output_power(
+        'readout') + ro_attenuation + (fsp + 11)
     ro_power = ro_power * dBm
     dataset = [dvw.create_dataset_oneshot_data(
         data=data[q][s],
-        name="ac_stark_spec_test",
+        name="ac_stark_chi",
         # describes an independent (or indep) axis, with the label and time
         independents=[pdv.IndependentAxis('readoutFrequency', 'Hz'),
-                    pdv.IndependentAxis('q_freq_full', 'Hz')],
+                      pdv.IndependentAxis('q_freq_full', 'Hz')],
         # describes the dependent axes, with the label, legend, and unit (empty in this case)
         dependents=[
             pdv.DependentAxis("|0>", "|0>", ""),
             pdv.DependentAxis("|1>", "|1>", ""),
         ],
-        params={"state": s,
-                keys.FREQUENCY_1_0: quam.qubits[q].f_01 * Hz,
-                keys.READOUT_POWER: ro_power,
-                'anharmonicity': -200 * MHz,
-                keys.BARE_RESONATOR_FREQUENCY: quam.qubits[q].resonator.RF_frequency * Hz},
+        params={
+            'target': str(q),
+            "state": s,
+            keys.FREQUENCY_1_0: quam.qubits[q].f_01 * Hz,
+            keys.READOUT_POWER: ro_power,
+            'anharmonicity': -200 * MHz,
+            keys.BARE_RESONATOR_FREQUENCY: quam.qubits[q].resonator.RF_frequency * Hz},
     ) for s in [0, 1]]
+    datasets[q] = dataset
 
     result = datataker_base.DataTakerResult(dataset)
     analysis = CombinedACStarkChiAnalysis.from_data(result)
     results[q] = result
     analyses[q] = analysis
+    dac_amp = quam.qubits[q].resonator.operations['readout'].amplitude
+    drive_freq_ghz = quam.qubits[q].resonator.RF_frequency * 1e-9
+    # print('actual readout amp = ', dac_amp)
+    row_to_add = [
+        q,
+        analyses[q].combined_model.chi['MHz'],
+        analyses[q].combined_model.average_linewidth['MHz'],
+        2*abs(analyses[q].combined_model.chi_GHz /
+              analyses[q].combined_model.average_linewidth_GHz),
+        analyses[q].combined_model.compute_average_on_resonance_photon_number(
+            dac_amp),
+        analyses[q].combined_model.average_shift_GHz_per_dac_amp_squared_on_res * dac_amp**2*1e3,
+        analyses[q].combined_model.compute_photon_numbers(
+            drive_freq_ghz, dac_amp),
+        analyses[q].combined_model.effective_readout_attenuation
+    ]
+    df_summary.loc[len(df_summary.index)] = row_to_add
 
+df_summary
 
 # %%
-fig, ax = plt.subplots(1, len(ds.qubit), figsize=[12, 4], sharey=True)
+fig, ax = plt.subplots(1, len(ds.qubit), figsize=[12, 4], squeeze=False)
 for i, q in enumerate(ds.qubit.values):
-    analyses[q].plot(ax=ax[i])
+    drive_freq_ghz = quam.qubits[q].resonator.RF_frequency * 1e-9
+    analyses[q].plot(ax=ax[0][i])
+    ax[0][i].axvline(drive_freq_ghz, color='r', linestyle='--')
+    ax[0][i].set_aspect(1)
+    ax[0][i].set_title(q)
+fig.suptitle('ACStarkChi model results')
+fig.tight_layout()
+# %%
+for q in ds.qubit.values:
+    x = 2*abs(analyses[q].combined_model.chi_GHz /
+              analyses[q].combined_model.average_linewidth_GHz)
+    print(q,
+          analyses[q].combined_model.average_linewidth*(1+x**2),
+          np.sqrt(analyses[q].combined_model.average_linewidth*(1+x**2)))
+# %%
+save_to_quam = False
+if save_to_quam:
+    for q in ds.qubit.values:
+        print(q)
+        print(analyses[q].combined_model.average_resonance_freq_GHz -
+            quam.qubits[q].resonator.LO_frequency * 1e-9)
+        quam.qubits[q].resonator.intermediate_frequency = analyses[q].combined_model.average_resonance_freq_GHz * \
+            1e9 - quam.qubits[q].resonator.LO_frequency
+        print(quam.qubits[q].resonator.intermediate_frequency * 1e-9)
+
+    quam.save()
+# %% calibrating the difference between power2amp and get_output_power for a -11 full_scale_power_dbm on readout
+print('expected readout amp = ', readout_helpers.power2amp(quam.qubits['q0'].resonator.get_output_power(
+    'readout') * dBm - 16.95 * dBm))
+print('actual readout amp = ',
+      quam.qubits['q0'].resonator.operations['readout'].amplitude)
+# %% prepare plot for presenting
+
+rabi_rates = {q.name: (2/(4*operation_duration_clk[q.name])) * GHz for q in qubits}  # the factor of 2 is because it's a half-cosine waveform
+assert len(set(rabi_rates.values())) == 1
+col_row_map = {0: 2, 1: 3}
+fig, ax = plt.subplots(2, len(qubits), sharey=True)
+for i, ax_row in enumerate(ax):
+    for j, ax_col in enumerate(ax_row):
+        dataset_ghz = datasets[qubits[j].name][i]
+        dataset_ghz[:, [0, 1]] = dataset_ghz[:, [0, 1]] * 1e-9
+        dataset_ghz.quick_plot(column=col_row_map[i],
+                                               ax=ax_col, title=qubits[j].name,
+                                               colorbar=False,
+                                               label_axes=False)
+        ax_col.set_aspect(1)
+        if j == 0:
+            ax_col.set_ylabel('qubit offset freq [GHz]')
+        if i == 1:
+            ax_col.set_xlabel('readout freq [GHz]')
+
+fig.suptitle(f'Rabi rate = {list(rabi_rates.values())[0]['MHz']:.1f} MHz, '
+             f'pi duration = {list(operation_duration_clk.values())[0] * 4} nsec')
 fig.tight_layout()
 
-    # %%
-dvw['00054 - ac_stark_spec_test'].quick_plot()
+for q in qubits:
+    for i in [0, 1]:
+        print(q.name, i, datasets[q.name][i].url())
 
-from quam_libs.components.readout_resonator import ReadoutResonator
-ReadoutResonator.measure
+for q in qubits:
+    for i in [0, 1]:
+        print(q.name, i, datasets[q.name][i].parameters[keys.READOUT_POWER])
+# %%

@@ -24,25 +24,21 @@ import numpy as np
 
 # %% {Node_parameters}
 class Parameters(NodeParameters):
-
+    number_of_reps: int = 200
     qubits: Optional[List[str]] = None
-    num_averages: int = 1000
-    max_number_x_gates_per_sweep: int = 200
-    x_gate_step_size: int = 2
+    num_averages: int = 500
+    max_number_x_gates_per_sweep: int = 2000
+    x_gate_step_size: int = 100
     reset_type_thermal_or_active: Literal["thermal", "active"] = "active"
     simulate: bool = False
     simulation_duration_ns: int = 2500
     timeout: int = 100
     parallel: bool = False
-    other_qubits_on_equator: bool = True  # measure AC stark shift pull
-    detune_adverserial_drive: int = int(25e6) # this is needed to avoid ZZ affecting this measzurement
 
 
 node = QualibrationNode(
     name="08d_XY_crosstalk", parameters=Parameters(
-        qubits=['q0', 'q1',
-                'q2', 'q3', 'q4'
-                ]
+        qubits=['q0', 'q1', 'q2']
     ))
 
 
@@ -66,6 +62,7 @@ num_qubits = len(qubits)
 # %% {QUA_program}
 n_avg = node.parameters.num_averages  # The number of averages
 # Number of applied Rabi pulses sweep
+N_pi = node.parameters.max_number_x_gates_per_sweep
 reset_type = node.parameters.reset_type_thermal_or_active  # "active" or "thermal"
 operation = 'x180'
 # Pulse amplitude sweep (as a pre-factor of the qubit pulse amplitude) - must be within [-2; 2)
@@ -95,24 +92,13 @@ with program() as xy_crosstalk:
                     align()
                     for j, qubit_meas in enumerate(qubits):
                         qubit_meas.reset(reset_type)
-                        if node.parameters.other_qubits_on_equator:
-                            if i != j:
-                                qubit_meas.xy.play('y90')
                     align()
-                    qubit.xy.update_frequency(qubit.xy.intermediate_frequency + node.parameters.detune_adverserial_drive)
                     # Loop for error amplification (perform many qubit pulses)
                     with for_(count, 0, count < npi, count + 1):
                         qubit.xy.play(operation)
-                    # we want to keep duration between reset and meas fixed
-                    with for_(count, npi, count < max_x_gates, count + 1):
-                        qubit.xy.play(operation, amplitude_scale=0)
-                    qubit.xy.update_frequency(qubit.xy.intermediate_frequency)
                     align()
                     for j, qubit_meas in enumerate(qubits):
                         align()
-                        if node.parameters.other_qubits_on_equator:
-                            if i != j:
-                                qubit_meas.xy.play('-y90')
                         qubit_meas.resonator.measure(
                             "readout", qua_vars=(I[j], Q[j]))
                         assign(
@@ -122,27 +108,17 @@ with program() as xy_crosstalk:
                     for j, qubit_meas in enumerate(qubits):
                         align()
                         qubit_meas.reset(reset_type)
-                        if node.parameters.other_qubits_on_equator:
-                            if i != j:
-                                qubit_meas.xy.play('y90')
                         align()
-                        qubit.xy.update_frequency(qubit.xy.intermediate_frequency + node.parameters.detune_adverserial_drive)
                         with for_(count, 0, count < npi, count + 1):
                             qubit.xy.play(operation)
                         # we want to keep duration between reset and meas fixed
                         with for_(count, npi, count < max_x_gates, count + 1):
                             qubit.xy.play(operation, amplitude_scale=0)
-                        qubit.xy.update_frequency(qubit.xy.intermediate_frequency)
                         align()
-                        if node.parameters.other_qubits_on_equator:
-                            if i != j:
-                                qubit_meas.xy.play('x90')
                         qubit_meas.resonator.measure(
                             "readout", qua_vars=(I[j], Q[j]))
                         assign(
                             state[j], I[j] > qubit_meas.resonator.operations["readout"].threshold)
-                        if i == j:  # in this case we are most likely in 1 at end of cycle
-                            qubit.xy.play(operation)
                         save(state[j], state_stream[i][j])
 
     with stream_processing():
@@ -156,81 +132,134 @@ with program() as xy_crosstalk:
 # %% {Simulate_or_execute}
 config = generate_and_fix_config(quam)
 
-if node.parameters.simulate:
-    # Simulates the QUA program for the specified duration
-    simulation_config = SimulationConfig(
-        duration=node.parameters.simulation_duration_ns * 4)  # In clock cycles = 4ns
-    job = qmm.simulate(config, xy_crosstalk, simulation_config)
-    # Get the simulated samples and plot them for all controllers
-    samples = job.get_simulated_samples()
-    fig, ax = plt.subplots(nrows=len(samples.keys()), sharex=True)
-    for i, con in enumerate(samples.keys()):
-        plt.subplot(len(samples.keys()), 1, i+1)
-        samples[con].plot()
-        plt.title(con)
-    plt.tight_layout()
-    # Save the figure
-    node.results = {"figure": plt.gcf()}
-    node.machine = quam
+for _ in range(node.parameters.number_of_reps):
+    node = QualibrationNode(
+        name="08d_XY_crosstalk", parameters=Parameters(
+            qubits=['q0', 'q1', 'q2']
+        ))
+    if node.parameters.simulate:
+        # Simulates the QUA program for the specified duration
+        simulation_config = SimulationConfig(
+            duration=node.parameters.simulation_duration_ns * 4)  # In clock cycles = 4ns
+        job = qmm.simulate(config, xy_crosstalk, simulation_config)
+        # Get the simulated samples and plot them for all controllers
+        samples = job.get_simulated_samples()
+        fig, ax = plt.subplots(nrows=len(samples.keys()), sharex=True)
+        for i, con in enumerate(samples.keys()):
+            plt.subplot(len(samples.keys()), 1, i+1)
+            samples[con].plot()
+            plt.title(con)
+        plt.tight_layout()
+        # Save the figure
+        node.results = {"figure": plt.gcf()}
+        node.machine = quam
+        node.save()
+
+    else:
+        with qm_session(qmm, config, timeout=node.parameters.timeout) as qm:
+            job = qm.execute(xy_crosstalk)
+
+            results = fetching_tool(job, ["n"], mode="live")
+            while results.is_processing():
+                n = results.fetch_all()[0]
+                progress_counter(n, n_avg, start_time=results.start_time)
+
+    res = {}
+    for k, v in job.result_handles.items():
+        if 'dm' in k:
+            res[k] = v.fetch_all()
+
+    node.results['res'] = res
+    plt.figure()
+    for k in res:
+        plt.plot(x_gates_rep, res[k], '.-', label=k)
+    plt.legend()
+    plt.xlabel('Number of 2pi rotations on drive')
+    plt.ylabel('population of others')
+    plt.title('XY crosstalk raw data')
+    plt.ylim([0, 1])
+    node.results['fig_all'] = plt.gcf()
+    plt.figure()
+    for k in res:
+        if k[-1] != k[-2]:
+            plt.plot(x_gates_rep, res[k], '.-', label=f'q{k[-2]}->q{k[-1]}')
+    plt.legend(title='drive -> meas', loc='best')
+    plt.xlabel('Number of 2pi rotations on drive')
+    plt.ylabel('population')
+    plt.title('XY crosstalk raw data')
+    node.results['fig_adverse'] = plt.gcf()
+
     node.save()
+# %%
+res_array = []
+for qd in qubits:
+    res_array.append([])
+    for qn in qubits:
+        res_array[-1].append(
+            job.result_handles[f'dm_{qd.name[1:]}{qn.name[1:]}'].fetch_all())
 
-else:
-    with qm_session(qmm, config, timeout=node.parameters.timeout) as qm:
-        job = qm.execute(xy_crosstalk)
+res_array = np.array(res_array)
 
-        results = fetching_tool(job, ["n"], mode="live")
-        while results.is_processing():
-            n = results.fetch_all()[0]
-            progress_counter(n, n_avg, start_time=results.start_time)
 
-res = {}
-for k, v in job.result_handles.items():
-    if 'dm' in k:
-        res[k] = v.fetch_all()
+# %% 
+date = '2025-01-03'
+data_storage_path = '/usr/local/google/home/ellior/.qualibrate/user_storage/LSP04_v01_GLACIER/' + date
+# go over all folders in this path, and for each folder load the npz file and put it in a dictionary
 
-res_array = np.array([[res[f'dm_{q.id[1:]}{qm.id[1:]}'] for qm in qubits] for q in qubits])
-q_index_array = np.array([[[q.id[1:], qm.id[1:]] for qm in qubits] for q in qubits])
+timestamp_format = "%Y-%m-%d-%H%M%S"
+
+data = {}
+timestamps = {}
+for folder in os.listdir(data_storage_path):
+    folder_path = os.path.join(data_storage_path, folder)
+    if os.path.isdir(folder_path):
+        folder_spec = folder.split('_')
+        index = int(folder_spec[0][1:])
+
+        timestamps[index] = datetime.strptime(
+            date + '-' + folder_spec[-1], timestamp_format)
+        data[index] = np.load(os.path.join(folder_path, 'arrays.npz'))
 
 import xarray as xr
-da = xr.DataArray(res_array,
-                  coords=[('qd', [q.id for q in qubits]),
-                          ('qm', [qm.id for qm in qubits]),
-                          ('x_gates', x_gates_rep)
-                          ],
-                  dims=['qd', 'qm', 'x_gates']
-                  )
 
-node.results['res'] = res
-plt.figure()
-for k in res:
-    plt.plot(x_gates_rep, res[k], '.-', label=k)
-plt.legend()
-plt.xlabel('Number of 2pi rotations on drive')
-plt.ylabel('population of others')
-plt.title('XY crosstalk raw data')
-plt.ylim([0, 1])
-node.results['fig_all'] = plt.gcf()
-plt.figure()
-for k in res:
-    if k[-1] != k[-2]:
-        plt.plot(x_gates_rep, res[k], '.-', label=f'q{k[-2]}->q{k[-1]}')
-plt.legend(title='drive -> meas', loc='best')
-plt.xlabel('Number of 2pi rotations on drive')
-plt.ylabel('population')
-plt.title('XY crosstalk raw data')
-node.results['fig_adverse'] = plt.gcf()
+dat_ds = {}
+for index in data:
+    if index > 263:
+        dat_ds[index] = xr.Dataset(data_vars={k: ('num_pi', v) for k, v in data[index].items()}, coords={'num_pi': ('num_pi', x_gates_rep), 'timestamp': timestamps[index]})
 
-node.save()
+ds = xr.concat([dat_ds[index] for index in dat_ds], dim='timestamp').sortby('timestamp')
+xr.Dataset.to_dataarray()
+# %%
+from quam_libs.lib.fit import fit_oscillation, oscillation
+da_exp = ds.to_dataarray(dim='experiment')
+osc = fit_oscillation(da_exp, dim='num_pi')
 
 # %%
-import xrft
-da.plot(col='qd', row='qm')
-# %%
-da_ft = xrft.power_spectrum(da, 'x_gates', 'x_gates', detrend='constant')
-# da_ft /= da_ft.max(dim='freq_x_gates')
-da_ft.plot(col='qd', row='qm')
-# %%
-from quam_libs.lib.fit import peaks_dips
+osc.sel(fit_vals='f', experiment=['res.dm_00', 'res.dm_11', 'res.dm_22']).plot(hue='experiment')
+plt.xlabel('time [UTC]')
+plt.ylabel('Pi rotation error')
+plt.title('Rotation errors over time')
+plt.legend(['q0->q0', 'q1->q1', 'q2->q2'], title='drive->meas')
 
-peaks_dips(da_ft, 'freq_x_gates', prominence_factor=0.25).position.transpose().plot.imshow(yincrease=False, vmax=0.05)
+# %%
+ds.to_dataarray(dim='experiment').sel(num_pi=1+12*5).plot(hue='experiment')
+
+# %%
+pi_coeff = 5
+da_exp.sel(num_pi=1+12*pi_coeff).\
+    sel(experiment=list(set(da_exp.experiment.values).difference(['res.dm_00', 'res.dm_11', 'res.dm_22']))).\
+        plot(hue='experiment')
+# %%
+fig, ax = plt.subplots(3, 1, sharex=True, figsize=(4, 8))
+da_exp.sel(num_pi=1+12*pi_coeff).\
+    sel(experiment=['res.dm_01', 'res.dm_02']).\
+        plot(hue='experiment', ax=ax[0])
+da_exp.sel(num_pi=1+12*pi_coeff).\
+    sel(experiment=['res.dm_10', 'res.dm_12']).\
+        plot(hue='experiment', ax=ax[1])
+da_exp.sel(num_pi=1+12*pi_coeff).\
+    sel(experiment=['res.dm_20', 'res.dm_21']).\
+        plot(hue='experiment', ax=ax[2])
+
+fig.tight_layout()
 # %%

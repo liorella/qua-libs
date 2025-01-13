@@ -44,8 +44,8 @@ class Parameters(NodeParameters):
     num_averages: int = 100
     frequency_detuning_in_mhz: float = 1
     min_wait_time_in_ns: int = 16
-    max_wait_time_in_ns: int = 20000
-    num_time_points: int = 200
+    max_wait_time_in_ns: int = 80000
+    num_time_points: int = 800
     log_or_linear_sweep: Literal["log", "linear"] = "linear"
     reset_type: Literal["thermal", "active"] = "thermal"
     use_state_discrimination: bool = False

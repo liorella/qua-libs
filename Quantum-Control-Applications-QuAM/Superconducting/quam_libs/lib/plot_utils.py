@@ -378,3 +378,20 @@ def grid_iter(grid: xr.plot.FacetGrid) -> Tuple[matplotlib.axes.Axes, dict]:
     for axr, ndr in zip(grid.axes, grid.name_dicts):
         for ax, nd in zip(axr, ndr):
             yield ax, nd
+
+
+def plot_confusion_matrix(node, qubit, ax):
+    confusion = node.results["results"][qubit["qubit"]]["confusion_matrix"]
+    ax.imshow(confusion, vmin=0, vmax=1)
+    ax.set_xticks([0, 1])
+    ax.set_yticks([0, 1])
+    ax.set_xticklabels(labels=["|g>", "|e>"])
+    ax.set_yticklabels(labels=["|g>", "|e>"])
+    ax.set_ylabel("Prepared")
+    ax.set_xlabel("Measured")
+    ax.text(0, 0, f"{100 * confusion[0][0]:.1f}%", ha="center", va="center", color="k")
+    ax.text(1, 0, f"{100 * confusion[0][1]:.1f}%", ha="center", va="center", color="w")
+    ax.text(0, 1, f"{100 * confusion[1][0]:.1f}%", ha="center", va="center", color="w")
+    ax.text(1, 1, f"{100 * confusion[1][1]:.1f}%", ha="center", va="center", color="k")
+    ax.set_title(qubit["qubit"])
+

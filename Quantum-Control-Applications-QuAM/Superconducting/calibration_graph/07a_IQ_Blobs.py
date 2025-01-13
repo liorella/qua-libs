@@ -26,7 +26,7 @@ from qualibrate import QualibrationNode, NodeParameters
 from quam_libs.components import QuAM
 from quam_libs.macros import qua_declaration
 from quam_libs.lib.qua_datasets import convert_IQ_to_V
-from quam_libs.lib.plot_utils import QubitGrid, grid_iter
+from quam_libs.lib.plot_utils import QubitGrid, grid_iter, plot_confusion_matrix
 from quam_libs.lib.save_utils import fetch_results_as_xarray
 from qualang_tools.analysis.discriminator import two_state_discriminator
 from qualang_tools.results import progress_counter, fetching_tool
@@ -271,19 +271,7 @@ else:
 
     grid = QubitGrid(ds, [q.grid_location for q in qubits])
     for ax, qubit in grid_iter(grid):
-        confusion = node.results["results"][qubit["qubit"]]["confusion_matrix"]
-        ax.imshow(confusion, vmin=0, vmax=1)
-        ax.set_xticks([0, 1])
-        ax.set_yticks([0, 1])
-        ax.set_xticklabels(labels=["|g>", "|e>"])
-        ax.set_yticklabels(labels=["|g>", "|e>"])
-        ax.set_ylabel("Prepared")
-        ax.set_xlabel("Measured")
-        ax.text(0, 0, f"{100 * confusion[0][0]:.1f}%", ha="center", va="center", color="k")
-        ax.text(1, 0, f"{100 * confusion[0][1]:.1f}%", ha="center", va="center", color="w")
-        ax.text(0, 1, f"{100 * confusion[1][0]:.1f}%", ha="center", va="center", color="w")
-        ax.text(1, 1, f"{100 * confusion[1][1]:.1f}%", ha="center", va="center", color="k")
-        ax.set_title(qubit["qubit"])
+        plot_confusion_matrix(node, qubit, ax)
 
     grid.fig.suptitle("g.s. and e.s. fidelity")
     plt.tight_layout()
@@ -339,9 +327,17 @@ else:
     grid.fig.tight_layout()
     node.results['hist_Q'] = grid.fig
 
-    print_qubit_params(quam, [['resonator', 'operations', 'readout', 'amplitude'],
+    params_df = print_qubit_params(quam, [['resonator', 'operations', 'readout', 'amplitude'],
                               ['resonator', 'operations', 'readout', 'length'],
                               ['resonator', 'opx_output', 'full_scale_power_dbm']])
+    
+    # I inferred this value so that I will get the correct amplitude when using readout_helpers.power2amp
+    ro_attenuation = 16.95
+    ro_power = [q.resonator.get_output_power(operation_name) - ro_attenuation for q in quam.qubits.values()]
+
+    # add RO power as a column to params_df
+    params_df['ro_power_dbm'] = ro_power
+    params_df
 
     # %% {Update_state}
     with node.record_state_updates():
